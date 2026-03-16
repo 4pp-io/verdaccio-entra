@@ -7,7 +7,7 @@ Microsoft Entra ID (Azure AD) auth plugin for [Verdaccio](https://verdaccio.org/
 - Validates Entra ID access tokens using JWKS (RS256)
 - Supports both v1.0 (`sts.windows.net`) and v2.0 (`login.microsoftonline.com`) token issuers
 - Group and role-based access control from JWT claims
-- Environment variable resolution in config (`${ENV_VAR}`)
+- Environment variable override for config (`ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`)
 - Uses Verdaccio's native login flow — no custom middleware needed
 - Docker setup using standard Verdaccio entrypoint with multi-stage build
 
@@ -24,8 +24,8 @@ Add to your Verdaccio `config.yaml` (see [best practices](https://verdaccio.org/
 ```yaml
 auth:
   entra:
-    clientId: "${ENTRA_CLIENT_ID}"
-    tenantId: "${ENTRA_TENANT_ID}"
+    clientId: "your-client-id"   # or set ENTRA_CLIENT_ID env var (takes precedence)
+    tenantId: "your-tenant-id"   # or set ENTRA_TENANT_ID env var (takes precedence)
 
 # Use $authenticated on all packages — Verdaccio best practice for private registries
 # @see https://verdaccio.org/docs/best#strong-package-access-with-authenticated

@@ -21,13 +21,6 @@ class JwksServiceError extends Error {
 	}
 }
 
-/** Resolve "${ENV_VAR}" patterns to process.env values */
-function resolveEnv(val: string): string | undefined {
-	const m = /^\$\{(\w+)\}$/.exec(val);
-	const key = m?.[1];
-	return key ? process.env[key] : undefined;
-}
-
 /** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */
 function assertGuid(value: string, label: string): void {
 	if (!value || !GUID_RE.test(value)) {
@@ -80,8 +73,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
-		const clientId = resolveEnv(config.clientId) ?? config.clientId;
-		const tenantId = resolveEnv(config.tenantId) ?? config.tenantId;
+		// Env vars take precedence over config.yaml values.
+		// Verdaccio does NOT resolve ${VAR} patterns in plugin config —
+		// so we read env vars directly rather than hand-rolling interpolation.
+		const clientId = process.env["ENTRA_CLIENT_ID"] ?? config.clientId;
+		const tenantId = process.env["ENTRA_TENANT_ID"] ?? config.tenantId;
 		assertGuid(clientId, "clientId");
 		assertGuid(tenantId, "tenantId");
 		this._entraConfig = { ...config, clientId, tenantId };

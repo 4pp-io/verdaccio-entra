@@ -8,10 +8,12 @@ web:
   favicon: ""
   gravatar: true
 
+# Plugin reads ENTRA_CLIENT_ID and ENTRA_TENANT_ID from environment variables.
+# Values here are fallbacks only (Verdaccio does NOT resolve ${VAR} in plugin config).
 auth:
   entra:
-    clientId: "${ENTRA_CLIENT_ID}"
-    tenantId: "${ENTRA_TENANT_ID}"
+    clientId: "00000000-0000-0000-0000-000000000000"
+    tenantId: "00000000-0000-0000-0000-000000000000"
 
 uplinks:
   npmjs:

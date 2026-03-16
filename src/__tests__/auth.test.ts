@@ -131,30 +131,20 @@ describe("EntraPlugin constructor", () => {
 		expect(() => createPlugin({ clientId: "" })).toThrow(/Invalid clientId/);
 	});
 
-	it("resolves env vars in config", () => {
-		process.env.TEST_ENTRA_CLIENT = TEST_CLIENT;
-		process.env.TEST_ENTRA_TENANT = TEST_TENANT;
+	it("env vars override config values", () => {
+		process.env.ENTRA_CLIENT_ID = TEST_CLIENT;
+		process.env.ENTRA_TENANT_ID = TEST_TENANT;
 		try {
+			// Config has dummy values but env vars provide valid GUIDs
 			expect(() =>
 				createPlugin({
-					clientId: "${TEST_ENTRA_CLIENT}",
-					tenantId: "${TEST_ENTRA_TENANT}",
+					clientId: "placeholder",
+					tenantId: "placeholder",
 				}),
 			).not.toThrow();
 		} finally {
-			delete process.env.TEST_ENTRA_CLIENT;
-			delete process.env.TEST_ENTRA_TENANT;
-		}
-	});
-
-	it("throws when env var resolves to non-GUID", () => {
-		process.env.TEST_BAD_ID = "bad-value";
-		try {
-			expect(() =>
-				createPlugin({ clientId: "${TEST_BAD_ID}" }),
-			).toThrow(/Invalid clientId/);
-		} finally {
-			delete process.env.TEST_BAD_ID;
+			delete process.env.ENTRA_CLIENT_ID;
+			delete process.env.ENTRA_TENANT_ID;
 		}
 	});
 });
