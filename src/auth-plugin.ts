@@ -24,7 +24,8 @@ class JwksServiceError extends Error {
 /** Resolve "${ENV_VAR}" patterns to process.env values */
 function resolveEnv(val: string): string | undefined {
 	const m = /^\$\{(\w+)\}$/.exec(val);
-	return m ? process.env[m[1]] : undefined;
+	const key = m?.[1];
+	return key ? process.env[key] : undefined;
 }
 
 /** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */

@@ -253,7 +253,8 @@ describe("authenticate", () => {
 		const token = signToken(validPayload(), { expiresIn: "1h" });
 		// Manually craft a token with nbf far in the future
 		const decoded = jwt.decode(token, { complete: true });
-		const payload = { ...decoded!.payload as Record<string, unknown>, nbf: Math.floor(Date.now() / 1000) + 99999 };
+		if (!decoded || typeof decoded === "string") throw new Error("test setup: failed to decode token");
+		const payload = { ...decoded.payload as Record<string, unknown>, nbf: Math.floor(Date.now() / 1000) + 99999 };
 		const futureToken = jwt.sign(payload, privateKey, {
 			algorithm: "RS256",
 			header: { alg: "RS256", kid: TEST_KID },

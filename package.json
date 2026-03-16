@@ -57,7 +57,7 @@
 	"author": "primeinc <vincit.omnia.veritas@lellirose.com>",
 	"scripts": {
 		"build": "tsc",
-		"lint": "eslint src/ types/",
+		"lint": "eslint --max-warnings=0 --no-inline-config src/ types/",
 		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
 		"test:watch": "vitest",
