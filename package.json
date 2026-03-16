@@ -26,6 +26,7 @@
 		"typescript": "5.9.3",
 		"typescript-eslint": "^8.57.0",
 		"@vitest/coverage-v8": "^3.2.1",
+		"tsx": "^4.21.0",
 		"vitest": "^3.2.1"
 	},
 	"keywords": [
@@ -61,6 +62,7 @@
 		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
 		"test:watch": "vitest",
+		"check-config": "tsx scripts/check-config.ts",
 		"changeset": "changeset",
 		"version-packages": "changeset version && npm install",
 		"release": "npm run build && changeset publish"

@@ -25,7 +25,7 @@ class JwksServiceError extends Error {
 function assertGuid(value: string, label: string): void {
 	if (!value || !GUID_RE.test(value)) {
 		throw new Error(
-			`Invalid ${label}: expected a GUID (e.g. "00000000-0000-0000-0000-000000000000"), ` +
+			`Invalid ${label}: expected a GUID (e.g. "aaaabbbb-0000-cccc-1111-dddd2222eeee"), ` +
 				`got "${value ? value.slice(0, 36) : "(empty)"}". ` +
 				`Check your Verdaccio config or ${label === "tenantId" ? "ENTRA_TENANT_ID" : "ENTRA_CLIENT_ID"} env var.`,
 		);
@@ -282,7 +282,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				},
 				(err, payload) => {
 					if (err) {
-						return reject(this._mapJwtError(err));
+						return reject(this._mapJwtError(err, token));
 					}
 					resolve(payload as EntraTokenPayload);
 				},
@@ -290,24 +290,75 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		});
 	}
 
-	private _mapJwtError(err: jwt.VerifyErrors): Error {
+	/**
+	 * Map JWT verification errors to actionable user messages.
+	 *
+	 * Detects common misconfigurations like swapped clientId/tenantId by
+	 * peeking at the raw token claims and comparing against config.
+	 *
+	 * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+	 */
+	private _mapJwtError(err: jwt.VerifyErrors, token?: string): Error {
 		const name = err.name;
 		if (name === "TokenExpiredError") {
 			return new Error("Entra ID token has expired. Obtain a fresh access token via MSAL and run npm login again.");
 		}
 		if (name === "JsonWebTokenError" && err.message.includes("audience")) {
+			const hint = this._detectSwappedIds(token);
 			return new Error(
 				`Token audience mismatch — expected api://${this._entraConfig.clientId}. ` +
-					"Ensure the MSAL scope matches the Verdaccio app registration.",
+					(hint ?? "Ensure the MSAL scope matches the Verdaccio app registration."),
 			);
 		}
 		if (name === "JsonWebTokenError" && err.message.includes("issuer")) {
+			const hint = this._detectSwappedIds(token);
 			return new Error(
-				"Token issuer mismatch — token was issued by a different Entra tenant. " +
-					`Expected tenant: ${this._entraConfig.tenantId}.`,
+				`Token issuer mismatch — expected tenant ${this._entraConfig.tenantId}. ` +
+					(hint ?? "Ensure the token was issued by the correct Entra tenant."),
 			);
 		}
+		if (name === "NotBeforeError") {
+			return new Error("Entra ID token is not yet valid (nbf claim is in the future). Check server clock sync.");
+		}
 		return new Error(`Entra token validation failed: ${err.message}`);
+	}
+
+	/**
+	 * Peek at raw token claims to detect if clientId and tenantId are swapped.
+	 *
+	 * Entra access tokens contain:
+	 *   - `aud`: the audience — should match `api://{clientId}` or the clientId GUID
+	 *   - `tid`: the tenant ID GUID
+	 *   - `iss`: contains the tenant ID in the URL path
+	 *   - `appid`/`azp`: the calling application's client ID
+	 *
+	 * If `tid` matches the configured clientId, or `aud` contains the configured
+	 * tenantId, the user likely swapped the two values.
+	 *
+	 * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference#payload-claims
+	 */
+	private _detectSwappedIds(token?: string): string | undefined {
+		if (!token) return undefined;
+		// jwt.decode returns null for unparseable tokens — never throws
+		const decoded = jwt.decode(token);
+		if (!decoded || typeof decoded === "string") return undefined;
+		const claims = decoded as Record<string, unknown>;
+		const tid = typeof claims["tid"] === "string" ? claims["tid"] : undefined;
+		const aud = typeof claims["aud"] === "string" ? claims["aud"] : undefined;
+
+		const { clientId, tenantId } = this._entraConfig;
+
+		// tid matches our clientId → they put the client ID where tenant ID should be
+		if (tid && tid.toLowerCase() === clientId.toLowerCase()) {
+			return `It looks like clientId and tenantId may be swapped — the token's tid claim (${tid}) matches your configured clientId. ` +
+				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
+		}
+		// aud contains our tenantId → they put the tenant ID where client ID should be
+		if (aud && aud.toLowerCase().includes(tenantId.toLowerCase())) {
+			return `It looks like clientId and tenantId may be swapped — the token's audience (${aud}) contains your configured tenantId. ` +
+				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
+		}
+		return undefined;
 	}
 
 	private _extractGroups(payload: EntraTokenPayload): string[] {

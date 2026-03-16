@@ -12,8 +12,8 @@ web:
 # Values here are fallbacks only (Verdaccio does NOT resolve ${VAR} in plugin config).
 auth:
   entra:
-    clientId: "00000000-0000-0000-0000-000000000000"
-    tenantId: "00000000-0000-0000-0000-000000000000"
+    clientId: "00001111-aaaa-2222-bbbb-3333cccc4444"
+    tenantId: "aaaabbbb-0000-cccc-1111-dddd2222eeee"
 
 uplinks:
   npmjs:

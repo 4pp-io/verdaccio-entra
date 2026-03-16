@@ -10,8 +10,8 @@ vi.mock("jwks-rsa", () => ({
 
 import EntraPlugin from "../auth-plugin";
 
-const TEST_TENANT = "11111111-1111-1111-1111-111111111111";
-const TEST_CLIENT = "22222222-2222-2222-2222-222222222222";
+const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
+const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
 
 function createPlugin(): EntraPlugin {
 	return new EntraPlugin(
@@ -170,6 +170,18 @@ describe("allow_unpublish", () => {
 	it("falls back to $authenticated when both are undefined", async () => {
 		const user = makeUser("alice", ["$authenticated"]);
 		const pkg = makePkg(undefined, undefined, undefined);
+		expect(await allowUnpublishAsync(plugin, user, pkg)).toBe(true);
+	});
+
+	it("grants unpublish for $all", async () => {
+		const user = makeUser("anonymous", []);
+		const pkg = makePkg(undefined, undefined, ["$all"]);
+		expect(await allowUnpublishAsync(plugin, user, pkg)).toBe(true);
+	});
+
+	it("grants unpublish for $anonymous", async () => {
+		const user = makeUser("anonymous", []);
+		const pkg = makePkg(undefined, undefined, ["$anonymous"]);
 		expect(await allowUnpublishAsync(plugin, user, pkg)).toBe(true);
 	});
 

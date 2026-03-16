@@ -6,8 +6,8 @@ import jwt from "jsonwebtoken";
 let privateKey: string;
 let publicKey: string;
 
-const TEST_TENANT = "11111111-1111-1111-1111-111111111111";
-const TEST_CLIENT = "22222222-2222-2222-2222-222222222222";
+const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
+const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
 const TEST_KID = "test-kid-001";
 
 beforeAll(() => {
@@ -192,6 +192,41 @@ describe("authenticate", () => {
 		expect(result).toBe(false);
 	});
 
+	// Swapped ID detection — provides actionable hints when clientId/tenantId are swapped
+	// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+
+	it("detects swapped IDs when tid matches configured clientId", async () => {
+		// Token's tid = our clientId, aud = our tenantId → swapped
+		const token = signToken(validPayload({
+			tid: TEST_CLIENT,
+			aud: `api://${TEST_TENANT}`,
+			iss: `https://sts.windows.net/${TEST_CLIENT}/`,
+		}));
+		const result = await authenticateAsync(plugin, "testuser", token);
+		// Still returns false (credential failure) but the logger gets the hint
+		expect(result).toBe(false);
+	});
+
+	it("detects swapped IDs when aud contains configured tenantId", async () => {
+		const token = signToken(validPayload({
+			aud: `api://${TEST_TENANT}`,
+			iss: `https://sts.windows.net/99999999-9999-9999-9999-999999999999/`,
+		}));
+		const result = await authenticateAsync(plugin, "testuser", token);
+		expect(result).toBe(false);
+	});
+
+	it("handles audience mismatch without tid/aud claims gracefully", async () => {
+		// Token with no tid or aud claims — _detectSwappedIds returns undefined
+		const token = signToken({
+			iss: `https://sts.windows.net/${TEST_TENANT}/`,
+			preferred_username: "user@contoso.com",
+			// deliberately no aud, no tid
+		});
+		const result = await authenticateAsync(plugin, "testuser", token);
+		expect(result).toBe(false);
+	});
+
 	// Service errors (JWKS endpoint down) return error — stops plugin chain
 	// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
 
@@ -250,6 +285,16 @@ describe("authenticate", () => {
 			header: { alg: "RS256", kid: TEST_KID },
 		} as jwt.SignOptions);
 		const result = await authenticateAsync(plugin, "testuser", futureToken);
+		expect(result).toBe(false);
+	});
+
+	it("returns false for generic JsonWebTokenError (e.g. invalid signature)", async () => {
+		// Craft a token with valid structure but tampered signature → JsonWebTokenError "invalid signature"
+		// This doesn't match "audience" or "issuer" so it hits the generic fallback
+		const token = signToken(validPayload());
+		const parts = token.split(".");
+		const tampered = [parts[0], parts[1], "invalidsignature"].join(".");
+		const result = await authenticateAsync(plugin, "testuser", tampered);
 		expect(result).toBe(false);
 	});
 
