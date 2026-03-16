@@ -140,42 +140,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			});
 	}
 
-	/**
-	 * adduser: called by `npm login` / `npm adduser`.
-	 *
-	 * Intentionally mirrors `authenticate` — Entra ID is an external IdP,
-	 * so there is no concept of "registering" a user via npm. This handler
-	 * exists to prevent Verdaccio from returning "plugin does not support
-	 * adduser" when a developer types `npm adduser` instead of `npm login`.
-	 * Both commands result in the same Entra token validation.
-	 *
-	 * @see https://verdaccio.org/docs/plugin-auth — adduser callback
-	 */
-	public adduser(user: string, password: string, cb: pluginUtils.AuthUserCallback): void {
-		debug("adduser called for: %s", user);
-		if (password.length > MAX_TOKEN_BYTES) {
-			cb(null, false);
-			return;
-		}
-		this._validateToken(password)
-			.then(() => {
-				this._logger.info({ user }, "User @{user} added via Entra ID");
-				debug("adduser success for %s", user);
-				// Per docs: cb(null, true) signals success
-				// @see https://verdaccio.org/docs/plugin-auth#if-adduser-success
-				cb(null, true);
-			})
-			.catch((err) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.warn({ user, err: msg }, "Entra adduser failed for @{user}: @{err}");
-				debug("adduser failed for %s: %s", user, msg);
-				if (this._isServiceError(err)) {
-					cb(errorUtils.getInternalError(msg));
-				} else {
-					cb(null, false);
-				}
-			});
-	}
+
 
 	/**
 	 * Allow access if user is in an allowed group (or access is open).

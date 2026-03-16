@@ -97,19 +97,6 @@ function authenticateAsync(
 	});
 }
 
-function adduserAsync(
-	plugin: EntraPlugin,
-	user: string,
-	password: string,
-): Promise<boolean | string | false> {
-	return new Promise((resolve, reject) => {
-		plugin.adduser(user, password, (err, result) => {
-			if (err) reject(err);
-			else resolve(result as boolean | string | false);
-		});
-	});
-}
-
 // ---- Tests ----
 
 describe("EntraPlugin constructor", () => {
@@ -305,30 +292,3 @@ describe("authenticate", () => {
 	});
 });
 
-describe("adduser", () => {
-	let plugin: EntraPlugin;
-	beforeEach(() => {
-		plugin = createPlugin();
-	});
-
-	it("succeeds with valid token", async () => {
-		const token = signToken(validPayload());
-		const result = await adduserAsync(plugin, "testuser", token);
-		expect(result).toBe(true);
-	});
-
-	it("returns false for invalid token (credential failure)", async () => {
-		const result = await adduserAsync(plugin, "testuser", "bad");
-		expect(result).toBe(false);
-	});
-
-	it("returns false for oversized token (credential failure)", async () => {
-		const result = await adduserAsync(plugin, "testuser", "x".repeat(MAX_TOKEN_BYTES + 1));
-		expect(result).toBe(false);
-	});
-
-	it("returns error for unknown kid (JWKS service failure)", async () => {
-		const token = signToken(validPayload(), { kid: "unknown-kid" });
-		await expect(adduserAsync(plugin, "testuser", token)).rejects.toThrow(/signing key/i);
-	});
-});
