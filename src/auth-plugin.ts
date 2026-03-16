@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 
 import type { EntraConfig, EntraTokenPayload, PackageAccessWithUnpublish } from "../types/index";
+import { enrichVerifyError } from "./diagnostics";
 
 const { Plugin } = pluginUtils;
 
@@ -213,6 +214,16 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 	// --- Internals ---
 
+	/**
+	 * Validate an Entra ID JWT: decode → fetch JWKS key → verify signature + claims.
+	 *
+	 * The cryptographic boundary is jwt.verify — ALL claim validation (exp, aud, iss)
+	 * is delegated to the library AFTER signature verification. No unverified claim
+	 * inspection occurs before the signature is checked.
+	 *
+	 * Diagnostic enrichment (swap detection, friendly messages) happens only in the
+	 * catch path via diagnostics.ts and is used for logging, never for auth decisions.
+	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
 		const decoded = jwt.decode(token, { complete: true });
 		if (!decoded || typeof decoded === "string") {
@@ -240,82 +251,30 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					"This may indicate the token was not issued by the expected Entra tenant.",
 			);
 		}
-		const publicKey = key.getPublicKey();
 
-		// Pre-check claims on the decoded (unverified) token to produce
-		// actionable error messages without string-matching library errors.
-		// Then verify the signature to ensure cryptographic validity.
-		// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-		const expectedAudience = `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`;
-		const claims = decoded.payload as EntraTokenPayload;
-		const swapHint = this._detectSwappedIds(claims);
-
-		if (claims.exp && claims.exp < Math.floor(Date.now() / 1000)) {
-			throw new Error("Entra ID token has expired. Obtain a fresh access token via MSAL and run npm login again.");
-		}
-		if (claims.aud && claims.aud !== expectedAudience) {
-			throw new Error(
-				`Token audience mismatch — expected ${expectedAudience}, got ${claims.aud}. ` +
-					(swapHint ?? "Ensure the MSAL scope matches the Verdaccio app registration."),
-			);
-		}
-		if (claims.iss && !this._issuers.includes(claims.iss)) {
-			throw new Error(
-				`Token issuer mismatch — expected tenant ${this._entraConfig.tenantId}, got ${claims.iss}. ` +
-					(swapHint ?? "Ensure the token was issued by the correct Entra tenant."),
-			);
-		}
-
-		// Claims look correct — now verify the cryptographic signature
+		// Signature verification + claim validation in one step.
+		// jwt.verify checks exp, aud, iss, nbf, and algorithms natively.
 		return new Promise((resolve, reject) => {
 			jwt.verify(
 				token,
-				publicKey,
+				key.getPublicKey(),
 				{
 					algorithms: ["RS256"],
 					issuer: this._issuers,
-					audience: expectedAudience,
+					audience: `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`,
 				},
 				(err, payload) => {
 					if (err) {
-						if (err.name === "NotBeforeError") {
-							return reject(new Error("Entra ID token is not yet valid (nbf claim is in the future). Check server clock sync."));
-						}
-						return reject(new Error(`Entra token validation failed: ${err.message}`));
+						// Enrich the error with diagnostic context for logging.
+						// This runs AFTER verification — the signature was checked,
+						// so peeking at claims here is safe (for DX, not auth).
+						const enriched = enrichVerifyError(err, token, this._entraConfig);
+						return reject(new Error(enriched));
 					}
 					resolve(payload as EntraTokenPayload);
 				},
 			);
 		});
-	}
-
-	/**
-	 * Detect if clientId and tenantId are swapped by inspecting token claims.
-	 *
-	 * Entra access tokens contain:
-	 *   - `aud`: the audience — should match `api://{clientId}` or the clientId GUID
-	 *   - `tid`: the tenant ID GUID
-	 *
-	 * If `tid` matches the configured clientId, or `aud` contains the configured
-	 * tenantId, the user likely swapped the two values.
-	 *
-	 * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference#payload-claims
-	 */
-	private _detectSwappedIds(claims: EntraTokenPayload): string | undefined {
-		const tid = typeof claims["tid"] === "string" ? (claims["tid"] as string) : undefined;
-		const { clientId, tenantId } = this._entraConfig;
-
-		// tid matches our clientId → they put the client ID where tenant ID should be
-		if (tid && tid.toLowerCase() === clientId.toLowerCase()) {
-			return `It looks like clientId and tenantId may be swapped — the token's tid claim (${tid}) matches your configured clientId. ` +
-				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
-		}
-		// aud contains our tenantId → they put the tenant ID where client ID should be
-		if (claims.aud && claims.aud.toLowerCase().includes(tenantId.toLowerCase())) {
-			return `It looks like clientId and tenantId may be swapped — the token's audience (${claims.aud}) contains your configured tenantId. ` +
-				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
-		}
-		return undefined;
 	}
 
 	private _extractGroups(payload: EntraTokenPayload): string[] {
