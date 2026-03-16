@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { TEST_TENANT, TEST_CLIENT, TEST_KID } from "./fixtures";
-import { MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
+import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
 
 // --- Test RSA key pair (generated once for all tests) ---
 let privateKey: string;
@@ -146,18 +146,26 @@ describe("EntraPlugin constructor", () => {
 });
 
 describe("OIDC discovery failure", () => {
-	it("returns service error when discovery fails", async () => {
+	it("retries with exponential backoff then returns service error", async () => {
+		vi.useFakeTimers();
 		// Override fetch to simulate discovery failure
 		const originalFetch = globalThis.fetch;
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-			ok: false,
-			status: 400,
-		}));
+		const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 400 });
+		vi.stubGlobal("fetch", mockFetch);
 		const plugin = createPlugin();
 		const token = signToken(validPayload());
-		// Discovery fails → plugin not ready → service error
+
+		// Advance through retry backoff timers (1s, 2s, 4s)
+		for (let i = 0; i < 3; i++) {
+			await vi.advanceTimersByTimeAsync(5000);
+		}
+
+		// All retries exhausted → plugin not ready → service error
 		await expect(authenticateAsync(plugin, "testuser", token)).rejects.toThrow(/OIDC discovery|not ready/i);
-		// Restore
+		// Verify it actually retried (3 attempts = 3 fetch calls)
+		expect(mockFetch).toHaveBeenCalledTimes(3);
+
+		vi.useRealTimers();
 		vi.stubGlobal("fetch", originalFetch);
 	});
 });
@@ -250,7 +258,7 @@ describe("authenticate", () => {
 	});
 
 	it("returns false for token exceeding max size (credential failure)", async () => {
-		const oversized = "x".repeat(MAX_TOKEN_BYTES + 1);
+		const oversized = "x".repeat(DEFAULT_MAX_TOKEN_BYTES + 1);
 		const result = await authenticateAsync(plugin, "testuser", oversized);
 		expect(result).toBe(false);
 	});

@@ -6,7 +6,7 @@
  *   - src/__tests__/check-config.test.ts (unit tests, no subprocess needed)
  */
 
-import { GUID_RE, AUDIENCE_PREFIX, ISSUERS } from "./auth-plugin";
+import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY } from "./auth-plugin";
 
 export interface CheckResult {
 	label: string;
@@ -17,6 +17,8 @@ export interface CheckResult {
 export interface CheckConfigInput {
 	clientId: string;
 	tenantId: string;
+	/** Entra authority URL — defaults to Azure Public cloud */
+	authority?: string;
 	/** Override fetch for testing */
 	fetcher?: typeof fetch;
 }
@@ -27,7 +29,7 @@ export interface CheckConfigInput {
  */
 export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]> {
 	const results: CheckResult[] = [];
-	const { clientId, tenantId, fetcher = fetch } = input;
+	const { clientId, tenantId, authority = DEFAULT_AUTHORITY, fetcher = fetch } = input;
 
 	const check = (label: string, ok: boolean, detail: string): void => {
 		results.push({ label, ok, detail });
@@ -75,7 +77,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 
 	// --- 3. Check JWKS endpoint ---
 	if (GUID_RE.test(tenantId)) {
-		const jwksUrl = `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`;
+		const jwksUrl = `${authority}/${tenantId}/discovery/v2.0/keys`;
 		try {
 			const res = await fetcher(jwksUrl);
 			check(
@@ -102,7 +104,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 
 	// --- 4. Check OpenID Connect discovery ---
 	if (GUID_RE.test(tenantId)) {
-		const oidcUrl = `https://login.microsoftonline.com/${tenantId}/v2.0/.well-known/openid-configuration`;
+		const oidcUrl = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
 		try {
 			const res = await fetcher(oidcUrl);
 			check(
@@ -112,7 +114,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 			);
 			if (res.ok) {
 				const body = (await res.json()) as { issuer?: string };
-				const expectedIssuer = ISSUERS.v2(tenantId);
+				const expectedIssuer = ISSUERS.v2(tenantId, authority);
 				check(
 					"Issuer matches tenant ID",
 					body.issuer === expectedIssuer,

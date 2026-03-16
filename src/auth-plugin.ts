@@ -4,8 +4,16 @@ import debugCore from "debug";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+
 import type { EntraConfig, EntraTokenPayload, PackageAccessWithUnpublish } from "../types/index";
 import { enrichVerifyError } from "./diagnostics";
+
+// Respect HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+// Node 22's native fetch uses undici internally but doesn't auto-configure
+// proxy support — we must set the global dispatcher explicitly.
+// @see https://undici.nodejs.org/#/docs/api/EnvHttpProxyAgent
+setGlobalDispatcher(new EnvHttpProxyAgent());
 
 const { Plugin } = pluginUtils;
 
@@ -13,7 +21,8 @@ const debug = debugCore("verdaccio:plugin:entra");
 
 /** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const MAX_TOKEN_BYTES = 8192;
+/** Default max token size. Entra tokens with many groups can reach 16-20KB. */
+export const DEFAULT_MAX_TOKEN_BYTES = 16_384;
 export const AUDIENCE_PREFIX = "api://";
 
 /**
@@ -111,6 +120,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _jwks: jwksClient.JwksClient | undefined;
 	private _issuer: string | undefined;
 	private _entraConfig: EntraConfig;
+	private _maxTokenBytes: number;
 	private _ready: Promise<void>;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
@@ -121,28 +131,14 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		assertGuid(clientId, "clientId");
 		assertGuid(tenantId, "tenantId");
 		this._entraConfig = { ...config, clientId, tenantId, authority };
+		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
 		this._logger = appOptions.logger;
 
 		// OIDC discovery resolves jwks_uri and issuer dynamically.
 		// This supports all sovereign clouds without hardcoded endpoints.
-		this._ready = discoverOidc(authority, tenantId)
-			.then((discovery) => {
-				this._issuer = discovery.issuer;
-				this._jwks = jwksClient({
-					jwksUri: discovery.jwks_uri,
-					cache: true,
-					cacheMaxAge: 600_000, // 10 min
-					rateLimit: true, // Prevent kid-spoofing DoS
-					jwksRequestsPerMinute: 10,
-				});
-				debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
-			})
-			.catch((err) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.error({ err: msg }, "OIDC discovery failed: @{err}");
-				debug("OIDC discovery failed: %s", msg);
-				// Plugin will reject all auth attempts until discovery succeeds
-			});
+		// Retries on failure so transient network issues at startup don't
+		// permanently kill the plugin.
+		this._ready = this._initWithRetry(authority, tenantId);
 
 		debug("EntraPlugin initializing for tenant %s, authority %s", tenantId, authority);
 	}
@@ -158,7 +154,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 */
 	public authenticate(user: string, password: string, cb: pluginUtils.AuthCallback): void {
 		debug("Authenticating user: %s", user);
-		if (password.length > MAX_TOKEN_BYTES) {
+		if (password.length > this._maxTokenBytes) {
 			cb(null, false);
 			return;
 		}
@@ -252,6 +248,50 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	// --- Internals ---
+
+	/**
+	 * Initialize OIDC discovery with retry on failure.
+	 * Retries up to 3 times with exponential backoff (1s, 2s, 4s).
+	 * Logs each failure — never swallows errors silently.
+	 */
+	private async _initWithRetry(authority: string, tenantId: string, maxRetries = 3): Promise<void> {
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				const discovery = await discoverOidc(authority, tenantId);
+				this._issuer = discovery.issuer;
+				this._jwks = jwksClient({
+					jwksUri: discovery.jwks_uri,
+					cache: true,
+					cacheMaxAge: 600_000, // 10 min
+					rateLimit: true, // Prevent kid-spoofing DoS
+					jwksRequestsPerMinute: 10,
+				});
+				this._logger.info(
+					{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
+					"OIDC discovery succeeded — issuer: @{issuer}",
+				);
+				debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
+				return;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				this._logger.error(
+					{ err: msg, attempt, maxRetries },
+					"OIDC discovery failed (attempt @{attempt}/@{maxRetries}): @{err}",
+				);
+				debug("OIDC discovery attempt %d/%d failed: %s", attempt, maxRetries, msg);
+				if (attempt < maxRetries) {
+					const delay = 1000 * Math.pow(2, attempt - 1);
+					await new Promise((r) => setTimeout(r, delay));
+				}
+			}
+		}
+		// All retries exhausted — log clearly, don't swallow
+		this._logger.error(
+			{ authority, tenantId },
+			"OIDC discovery failed after all retries — plugin will reject all auth attempts. " +
+				"Check authority (@{authority}) and tenantId (@{tenantId}).",
+		);
+	}
 
 	/**
 	 * Validate an Entra ID JWT: decode → fetch JWKS key → verify signature + claims.

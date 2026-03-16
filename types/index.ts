@@ -15,6 +15,12 @@ export interface EntraConfig {
 	clientId: string;
 	tenantId: string;
 	/**
+	 * Maximum token size in bytes before rejecting without parsing.
+	 * Entra tokens with many group claims can reach 16-20KB.
+	 * Default: 16384 (16KB).
+	 */
+	maxTokenBytes?: number;
+	/**
 	 * Optional Entra authority URL. Defaults to Azure Public cloud.
 	 * Set this for sovereign/national clouds:
 	 *   - US Government: https://login.microsoftonline.us
