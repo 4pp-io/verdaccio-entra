@@ -1,9 +1,10 @@
 # Verdaccio config with Entra ID auth
+# Aligned with: https://verdaccio.org/docs/best — Verdaccio best practices
 storage: /verdaccio/storage/data
 plugins: /verdaccio/plugins
 
 web:
-  title: "@ve Private Registry"
+  title: "@my-company Private Registry"
   favicon: ""
   gravatar: true
 
@@ -17,37 +18,60 @@ uplinks:
     url: https://registry.npmjs.org/
     cache: true
 
+# Best practice: order matters — packages are matched top to bottom.
+# Best practice: use $authenticated on ALL access to prevent unauthenticated reads.
+# Best practice: remove proxy on private packages to prevent dependency confusion.
+# @see https://verdaccio.org/docs/best#strong-package-access-with-authenticated
+# @see https://verdaccio.org/docs/best#remove-proxy-to-increase-security-at-private-packages
 packages:
-  "@ve/*":
+  "@my-company/*":
     access: $authenticated
     publish: $authenticated
     unpublish: $authenticated
+    # No proxy — private packages never resolve to npmjs (prevents dependency confusion)
 
   "@*/*":
-    access: $all
+    access: $authenticated
     publish: $authenticated
+    unpublish: $authenticated
     proxy: npmjs
 
   "**":
-    access: $all
+    access: $authenticated
     publish: $authenticated
+    unpublish: $authenticated
     proxy: npmjs
 
 server:
   keepAliveTimeout: 60
 
+# Best practice: configure JWT expiration for both API and web tokens.
+# API tokens: 7d (fintech default — shorter than Verdaccio's suggested 15d)
+# Web tokens: 1h (per Verdaccio best practice — short-lived browser sessions)
+# @see https://verdaccio.org/docs/best#expiring-tokens
 security:
   api:
     jwt:
       sign:
-        expiresIn: 30d
+        expiresIn: 7d
+        notBefore: 0
+  web:
+    sign:
+      expiresIn: 1h
+
+# Best practice: configure rate limiting for critical endpoints.
+# Defaults: 100 req / 15 min. Tightened for fintech.
+# @see https://verdaccio.org/docs/best#rate-limit
+userRateLimit:
+  windowMs: 900000
+  max: 50
 
 middlewares:
   audit:
     enabled: true
 
-listen:
-  - 0.0.0.0:4873
+# Note: `listen` is ignored in Docker — port is controlled by VERDACCIO_PORT env var.
+# @see https://verdaccio.org/docs/docker#docker-and-custom-port-configuration
 
 log:
   type: stdout

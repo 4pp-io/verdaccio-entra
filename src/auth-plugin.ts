@@ -4,16 +4,38 @@ import debugCore from "debug";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 
-import type { EntraConfig } from "../types/index";
+import type { EntraConfig, EntraTokenPayload } from "../types/index";
 
 const { Plugin } = pluginUtils;
 
 const debug = debugCore("verdaccio:plugin:entra");
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_TOKEN_BYTES = 8192;
+
+/** Thrown when the JWKS endpoint is unreachable — a service error, not a credential failure. */
+class JwksServiceError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "JwksServiceError";
+	}
+}
+
 /** Resolve "${ENV_VAR}" patterns to process.env values */
 function resolveEnv(val: string): string | undefined {
 	const m = /^\$\{(\w+)\}$/.exec(val);
 	return m ? process.env[m[1]] : undefined;
+}
+
+/** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */
+function assertGuid(value: string, label: string): void {
+	if (!value || !GUID_RE.test(value)) {
+		throw new Error(
+			`Invalid ${label}: expected a GUID (e.g. "00000000-0000-0000-0000-000000000000"), ` +
+				`got "${value ? value.slice(0, 36) : "(empty)"}". ` +
+				`Check your Verdaccio config or ${label === "tenantId" ? "ENTRA_TENANT_ID" : "ENTRA_CLIENT_ID"} env var.`,
+		);
+	}
 }
 
 /**
@@ -46,7 +68,7 @@ function resolveEnv(val: string): string | undefined {
  *   api:
  *     jwt:
  *       sign:
- *         expiresIn: 29d   # or whatever lifetime you want
+ *         expiresIn: 7d   # fintech default; adjust per your policy
  * ```
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
@@ -59,6 +81,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		super(config, appOptions);
 		const clientId = resolveEnv(config.clientId) ?? config.clientId;
 		const tenantId = resolveEnv(config.tenantId) ?? config.tenantId;
+		assertGuid(clientId, "clientId");
+		assertGuid(tenantId, "tenantId");
 		this._entraConfig = { ...config, clientId, tenantId };
 		this._logger = appOptions.logger;
 		// Accept both v1.0 (access tokens) and v2.0 (id tokens) issuers
@@ -85,9 +109,14 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 */
 	public authenticate(user: string, password: string, cb: pluginUtils.AuthCallback): void {
 		debug("Authenticating user: %s", user);
+		if (password.length > MAX_TOKEN_BYTES) {
+			// Not a valid Entra token — let next auth plugin try
+			// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-fails
+			cb(null, false);
+			return;
+		}
 		this._validateToken(password)
-			.then((decoded) => {
-				const payload = decoded as Record<string, unknown>;
+			.then((payload) => {
 				const upn = payload.preferred_username ?? payload.upn ?? payload.email ?? user;
 				const groups = this._extractGroups(payload);
 				this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
@@ -97,9 +126,17 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			})
 			.catch((err) => {
 				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.error({ user, err: msg }, "Authentication failed for @{user}: @{err}");
+				this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
 				debug("Authentication failed for %s: %s", user, msg);
-				cb(errorUtils.getUnauthorized(msg));
+				if (this._isServiceError(err)) {
+					// JWKS endpoint unreachable — service error, stop plugin chain
+					// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
+					cb(errorUtils.getInternalError(msg));
+				} else {
+					// Wrong credentials (expired, bad audience, not a JWT, etc.) — let next plugin try
+					// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-fails
+					cb(null, false);
+				}
 			});
 	}
 
@@ -113,18 +150,27 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 */
 	public adduser(user: string, password: string, cb: pluginUtils.AuthUserCallback): void {
 		debug("adduser called for: %s", user);
+		if (password.length > MAX_TOKEN_BYTES) {
+			cb(null, false);
+			return;
+		}
 		this._validateToken(password)
 			.then(() => {
 				this._logger.info({ user }, "User @{user} added via Entra ID");
 				debug("adduser success for %s", user);
 				// Per docs: cb(null, true) signals success
+				// @see https://verdaccio.org/docs/plugin-auth#if-adduser-success
 				cb(null, true);
 			})
 			.catch((err) => {
 				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.error({ user, err: msg }, "adduser failed for @{user}: @{err}");
+				this._logger.warn({ user, err: msg }, "Entra adduser failed for @{user}: @{err}");
 				debug("adduser failed for %s: %s", user, msg);
-				cb(errorUtils.getUnauthorized(msg));
+				if (this._isServiceError(err)) {
+					cb(errorUtils.getInternalError(msg));
+				} else {
+					cb(null, false);
+				}
 			});
 	}
 
@@ -175,9 +221,31 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		cb(err);
 	}
 
+	/**
+	 * Allow unpublish if user is in an allowed group.
+	 *
+	 * @see https://verdaccio.org/docs/plugin-auth#allow_access-allow_publish-or-allow_unpublish-callback
+	 */
+	public allow_unpublish(user: RemoteUser, pkg: PackageAccess, cb: pluginUtils.AuthAccessCallback): void {
+		const pkgAny = pkg as unknown as Record<string, unknown>;
+		debug("allow_unpublish for %s, unpublish list: %o", user?.name, pkgAny?.unpublish);
+		const required = (pkgAny?.unpublish as string[] | undefined) ?? pkg?.publish ?? ["$authenticated"];
+
+		if (this._matchGroups(user, required)) {
+			debug("%s granted unpublish via group match", user?.name);
+			cb(null, true);
+			return;
+		}
+
+		const err = errorUtils.getForbidden("not allowed to unpublish package");
+		this._logger.error({ user: user?.name }, "@{user} not allowed to unpublish");
+		debug("%s not allowed to unpublish: %s", user?.name, err.message);
+		cb(err);
+	}
+
 	// --- Internals ---
 
-	private async _validateToken(token: string): Promise<object> {
+	private async _validateToken(token: string): Promise<EntraTokenPayload> {
 		const decoded = jwt.decode(token, { complete: true });
 		if (!decoded || typeof decoded === "string") {
 			throw new Error(
@@ -199,7 +267,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			key = await this._jwks.getSigningKey(kid);
 		} catch (jwksErr) {
 			const msg = jwksErr instanceof Error ? jwksErr.message : String(jwksErr);
-			throw new Error(
+			throw new JwksServiceError(
 				`Failed to fetch signing key from Entra ID JWKS endpoint (kid: ${kid}): ${msg}. ` +
 					"This may indicate the token was not issued by the expected Entra tenant.",
 			);
@@ -219,7 +287,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					if (err) {
 						return reject(this._mapJwtError(err));
 					}
-					resolve(payload as object);
+					resolve(payload as EntraTokenPayload);
 				},
 			);
 		});
@@ -245,13 +313,23 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		return new Error(`Entra token validation failed: ${err.message}`);
 	}
 
-	private _extractGroups(payload: Record<string, unknown>): string[] {
+	private _extractGroups(payload: EntraTokenPayload): string[] {
 		return ["$authenticated", ...this._extractStringArray(payload.groups), ...this._extractStringArray(payload.roles)];
 	}
 
 	private _extractStringArray(value: unknown): string[] {
 		if (!Array.isArray(value)) return [];
 		return value.filter((item): item is string => typeof item === "string");
+	}
+
+	/**
+	 * Distinguish service errors (JWKS endpoint down) from credential failures
+	 * (expired token, wrong audience). Service errors stop the plugin chain;
+	 * credential failures let the next plugin try.
+	 * @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
+	 */
+	private _isServiceError(err: unknown): boolean {
+		return err instanceof JwksServiceError;
 	}
 
 	private _matchGroups(user: RemoteUser, required: string[]): boolean {

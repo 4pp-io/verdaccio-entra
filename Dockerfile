@@ -1,30 +1,46 @@
-FROM verdaccio/verdaccio:6
+# Multi-stage build per Verdaccio Docker docs.
+# Stage 1: build plugin in a clean Node image.
+# Stage 2: copy compiled output into the official Verdaccio image.
+# Uses the standard Verdaccio entrypoint — no custom start script.
+# @see https://verdaccio.org/docs/docker#adding-plugins-with-local-plugins-a-dockerfile
+# @see https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
-USER root
+# --- Stage 1: Build ---
+FROM node:lts-alpine AS builder
 
-# Copy plugin source
-WORKDIR /verdaccio/plugins/verdaccio-entra
-COPY package.json tsconfig.json ./
+WORKDIR /build
+
+# Install deps first (layer cache)
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Copy source and compile
+COPY tsconfig.json ./
 COPY src/ ./src/
 COPY types/ ./types/
-COPY docker/start.ts ./docker/
 
-# Install all deps (including devDeps for tsc), build plugin + start script, then prune
-RUN npm install && \
-    npx tsc && \
-    npx tsc docker/start.ts --outDir /verdaccio --module commonjs --target es6 --esModuleInterop --skipLibCheck && \
-    npm prune --omit=dev && \
-    rm -rf src types tsconfig.json node_modules/.cache docker
+RUN npx tsc
+
+# Prune to production deps only
+RUN npm prune --omit=dev && \
+    rm -rf src types tsconfig.json node_modules/.cache
+
+# --- Stage 2: Runtime ---
+FROM verdaccio/verdaccio:6
+
+# Copy compiled plugin into the plugins directory
+# Use $VERDACCIO_USER_UID:root per Verdaccio Docker docs
+COPY --chown=$VERDACCIO_USER_UID:root --from=builder /build/lib /verdaccio/plugins/verdaccio-entra/lib
+COPY --chown=$VERDACCIO_USER_UID:root --from=builder /build/node_modules /verdaccio/plugins/verdaccio-entra/node_modules
+COPY --chown=$VERDACCIO_USER_UID:root --from=builder /build/package.json /verdaccio/plugins/verdaccio-entra/package.json
 
 # Copy custom config
-# Uses runServer API instead of deprecated verdaccio CLI
-# @see https://verdaccio.org/docs/programmatically
-COPY docker/config.yaml /verdaccio/conf/config.yaml
-RUN chown -R 10001:65533 /verdaccio
+# Note: `listen` in config.yaml is ignored in Docker — use VERDACCIO_PORT env var
+# @see https://verdaccio.org/docs/docker#docker-and-custom-port-configuration
+COPY --chown=$VERDACCIO_USER_UID:root docker/config.yaml /verdaccio/conf/config.yaml
 
-USER 10001
-
-ENV VERDACCIO_PORT=4873
+# Standard Verdaccio entrypoint handles: port, address, protocol, signals.
+# All env vars (VERDACCIO_PORT, VERDACCIO_ADDRESS, VERDACCIO_PROTOCOL, etc.)
+# are handled by the base image.
+# @see https://verdaccio.org/docs/env#docker
 EXPOSE 4873
-
-CMD ["node", "/verdaccio/docker/start.js"]

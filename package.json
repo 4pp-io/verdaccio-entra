@@ -8,20 +8,25 @@
 		"node": ">=18"
 	},
 	"dependencies": {
-		"@verdaccio/core": "8.0.0-next-8.30",
-		"@verdaccio/config": "8.0.0-next-8.30",
+		"@verdaccio/core": "6.0.0-6-next.76",
 		"debug": "4.4.3",
 		"jsonwebtoken": "^9.0.3",
 		"jwks-rsa": "^4.0.1"
 	},
 	"devDependencies": {
-		"@types/node": "25.0.9",
-		"@types/express": "4.17.25",
+		"@changesets/changelog-github": "^0.6.0",
+		"@changesets/cli": "^2.30.0",
 		"@types/debug": "4.1.12",
-		"typescript": "5.9.3",
-		"@verdaccio/types": "13.0.0-next-8.10",
+		"@types/express": "4.17.25",
 		"@types/jsonwebtoken": "9.0.10",
-		"@verdaccio/auth": "8.0.0-next-8.30"
+		"@types/node": "25.0.9",
+		"@verdaccio/auth": "6.0.0-6-next.55",
+		"@verdaccio/types": "11.0.0-6-next.25",
+		"eslint": "^10.0.0",
+		"typescript": "5.9.3",
+		"typescript-eslint": "^8.57.0",
+		"@vitest/coverage-v8": "^3.2.1",
+		"vitest": "^3.2.1"
 	},
 	"keywords": [
 		"verdaccio",
@@ -52,6 +57,12 @@
 	"author": "primeinc <vincit.omnia.veritas@lellirose.com>",
 	"scripts": {
 		"build": "tsc",
-		"test": "echo \"Error: no test specified\" && exit 1"
+		"lint": "eslint src/ types/",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:watch": "vitest",
+		"changeset": "changeset",
+		"version-packages": "changeset version && npm install",
+		"release": "npm run build && changeset publish"
 	}
 }
