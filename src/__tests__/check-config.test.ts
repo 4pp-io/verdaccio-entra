@@ -109,13 +109,27 @@ describe("runChecks", () => {
 		expect(fail?.detail).toContain("wrong-issuer");
 	});
 
-	it("handles network error gracefully", async () => {
+	it("handles JWKS network error gracefully", async () => {
 		const results = await runChecks(input({
 			fetcher: vi.fn().mockRejectedValue(new Error("ENOTFOUND")) as unknown as typeof fetch,
 		}));
-		const fail = results.find((r) => r.label === "JWKS endpoint is reachable");
+		const jwksFail = results.find((r) => r.label === "JWKS endpoint is reachable");
+		expect(jwksFail?.ok).toBe(false);
+		expect(jwksFail?.detail).toContain("ENOTFOUND");
+		const oidcFail = results.find((r) => r.label === "OpenID Connect discovery is reachable");
+		expect(oidcFail?.ok).toBe(false);
+		expect(oidcFail?.detail).toContain("ENOTFOUND");
+	});
+
+	it("handles missing issuer in OIDC response", async () => {
+		const results = await runChecks(input({
+			fetcher: vi.fn().mockImplementation(() =>
+				Promise.resolve({ ok: true, json: () => Promise.resolve({ keys: [{ kid: "x" }] }) }),
+			) as unknown as typeof fetch,
+		}));
+		const fail = results.find((r) => r.label === "Issuer matches tenant ID");
 		expect(fail?.ok).toBe(false);
-		expect(fail?.detail).toContain("ENOTFOUND");
+		expect(fail?.detail).toContain("(missing)");
 	});
 
 	it("skips network checks when tenant is not a valid GUID", async () => {

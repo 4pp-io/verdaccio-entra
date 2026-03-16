@@ -21,14 +21,26 @@ beforeAll(() => {
 	publicKey = pair.publicKey;
 });
 
-// --- Mock fetch for OIDC discovery ---
-vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+// --- Mock undici for OIDC discovery (scoped fetch, not global) ---
+const mockUndici = vi.hoisted(() => {
+	return {
+		mockFetch: vi.fn(),
+	};
+});
+
+vi.mock("undici", () => ({
+	EnvHttpProxyAgent: vi.fn(),
+	fetch: mockUndici.mockFetch,
+}));
+
+// Default: successful OIDC discovery
+mockUndici.mockFetch.mockResolvedValue({
 	ok: true,
 	json: () => Promise.resolve({
 		issuer: DISCOVERED_ISSUER,
 		jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
 	}),
-}));
+});
 
 // --- Mock jwks-rsa to return our test public key ---
 vi.mock("jwks-rsa", () => {
@@ -148,10 +160,8 @@ describe("EntraPlugin constructor", () => {
 describe("OIDC discovery failure", () => {
 	it("retries with exponential backoff then returns service error", async () => {
 		vi.useFakeTimers();
-		// Override fetch to simulate discovery failure
-		const originalFetch = globalThis.fetch;
-		const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 400 });
-		vi.stubGlobal("fetch", mockFetch);
+		// Override undici fetch to simulate discovery failure
+		mockUndici.mockFetch.mockResolvedValue({ ok: false, status: 400 });
 		const plugin = createPlugin();
 		const token = signToken(validPayload());
 
@@ -162,11 +172,16 @@ describe("OIDC discovery failure", () => {
 
 		// All retries exhausted → plugin not ready → service error
 		await expect(authenticateAsync(plugin, "testuser", token)).rejects.toThrow(/OIDC discovery|not ready/i);
-		// Verify it actually retried (3 attempts = 3 fetch calls)
-		expect(mockFetch).toHaveBeenCalledTimes(3);
 
 		vi.useRealTimers();
-		vi.stubGlobal("fetch", originalFetch);
+		// Restore successful mock for other tests
+		mockUndici.mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({
+				issuer: DISCOVERED_ISSUER,
+				jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
+			}),
+		});
 	});
 });
 

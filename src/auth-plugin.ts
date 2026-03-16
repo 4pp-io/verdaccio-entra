@@ -1,23 +1,24 @@
 import { errorUtils, pluginUtils } from "@verdaccio/core";
-import type { Logger, PackageAccess, RemoteUser } from "@verdaccio/types";
+import type { Logger } from "@verdaccio/types";
 import debugCore from "debug";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-
-import type { EntraConfig, EntraTokenPayload, PackageAccessWithUnpublish } from "../types/index";
+import type { EntraConfig, EntraTokenPayload } from "../types/index";
 import { enrichVerifyError } from "./diagnostics";
-
-// Respect HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
-// Node 22's native fetch uses undici internally but doesn't auto-configure
-// proxy support — we must set the global dispatcher explicitly.
-// @see https://undici.nodejs.org/#/docs/api/EnvHttpProxyAgent
-setGlobalDispatcher(new EnvHttpProxyAgent());
 
 const { Plugin } = pluginUtils;
 
 const debug = debugCore("verdaccio:plugin:entra");
+
+/**
+ * Scoped proxy agent for OIDC discovery fetch calls.
+ * Reads HTTP_PROXY / HTTPS_PROXY / NO_PROXY from the environment.
+ * Scoped to this module — does NOT mutate the global dispatcher.
+ * @see https://undici.nodejs.org/#/docs/api/EnvHttpProxyAgent
+ */
+const proxyAgent = new EnvHttpProxyAgent();
 
 /** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -69,13 +70,12 @@ interface OidcDiscovery {
 }
 
 /**
- * Fetch OIDC discovery document to dynamically resolve JWKS endpoint and issuer.
- * This supports all sovereign/national clouds without hardcoding endpoints.
+ * Fetch OIDC discovery document using the scoped proxy agent.
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
 	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
-	const res = await fetch(url);
+	const res = await undiciFetch(url, { dispatcher: proxyAgent });
 	if (!res.ok) {
 		throw new Error(
 			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
@@ -89,30 +89,23 @@ async function discoverOidc(authority: string, tenantId: string): Promise<OidcDi
  * Verdaccio auth plugin that validates Entra ID (Azure AD) access tokens
  * using Verdaccio's **native login flow**.
  *
- * ## How it works (per Verdaccio Plugin Auth docs):
+ * This plugin is strictly an AuthN (authentication/identity) plugin.
+ * It does NOT implement authorization hooks (allow_access, allow_publish, etc.)
+ * — Verdaccio's core handles authorization natively using the groups returned
+ * by `authenticate`. Implementing custom authz hooks would break Verdaccio's
+ * built-in user-level and group-level package access controls.
+ *
+ * ## How it works:
  * @see https://verdaccio.org/docs/plugin-auth — IPluginAuth<T> interface
- * @see https://verdaccio.org/docs/configuration — security.api.jwt config
  *
  * 1. User obtains an Entra access-token client-side (MSAL / WAM broker).
  * 2. `npm login --registry=<url>` sends username + Entra JWT as password.
- * 3. `authenticate(user, password, cb)` validates the Entra JWT via JWKS
- *    and returns `cb(null, groups)` on success.
- * 4. **Verdaccio issues its own JWT** (signed with its `secret`) to npm.
- * 5. npm stores Verdaccio's token in `.npmrc`.
- * 6. Subsequent requests carry Verdaccio's JWT — Verdaccio validates it
- *    internally and populates `req.remote_user`. No middleware needed.
+ * 3. `authenticate(user, password, cb)` validates the JWT via JWKS
+ *    and returns `cb(null, groups)` — including `$authenticated` and
+ *    any Entra groups/roles from the token claims.
+ * 4. **Verdaccio issues its own JWT** and handles all subsequent
+ *    authorization (package access, publish, unpublish) using those groups.
  *
- * ### Sovereign cloud support
- * Set `authority` in config to use national clouds:
- * ```yaml
- * auth:
- *   entra:
- *     clientId: "..."
- *     tenantId: "..."
- *     authority: "https://login.microsoftonline.us"  # US Government
- * ```
- * The plugin uses OIDC discovery to resolve the JWKS endpoint and issuer
- * dynamically, so it works with any Entra-compatible authority.
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
@@ -120,6 +113,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _jwks: jwksClient.JwksClient | undefined;
 	private _issuer: string | undefined;
 	private _entraConfig: EntraConfig;
+	private _audience: string;
 	private _maxTokenBytes: number;
 	private _ready: Promise<void>;
 
@@ -131,16 +125,16 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		assertGuid(clientId, "clientId");
 		assertGuid(tenantId, "tenantId");
 		this._entraConfig = { ...config, clientId, tenantId, authority };
+		this._audience = process.env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
 		this._logger = appOptions.logger;
 
 		// OIDC discovery resolves jwks_uri and issuer dynamically.
-		// This supports all sovereign clouds without hardcoded endpoints.
 		// Retries on failure so transient network issues at startup don't
 		// permanently kill the plugin.
 		this._ready = this._initWithRetry(authority, tenantId);
 
-		debug("EntraPlugin initializing for tenant %s, authority %s", tenantId, authority);
+		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", tenantId, authority, this._audience);
 	}
 
 	/**
@@ -148,7 +142,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 *
 	 * Called by Verdaccio during `npm login`.
 	 * On success, returns groups via `cb(null, groups)`.
-	 * Verdaccio then issues its own JWT to the client.
+	 * Verdaccio then issues its own JWT and handles all authorization.
 	 *
 	 * @see https://verdaccio.org/docs/plugin-auth — authenticate callback
 	 */
@@ -176,75 +170,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					cb(null, false);
 				}
 			});
-	}
-
-	/**
-	 * Allow access if user is in an allowed group (or access is open).
-	 *
-	 * Verdaccio populates `user` from its own JWT — no middleware needed.
-	 * @see https://verdaccio.org/docs/plugin-auth — allow_access callback
-	 */
-	public allow_access(user: RemoteUser, pkg: PackageAccess, cb: pluginUtils.AccessCallback): void {
-		debug("allow_access for %s to %o", user?.name, pkg?.access);
-		const required = pkg?.access ?? ["$authenticated"];
-
-		if (required.includes("$all") || required.includes("$anonymous")) {
-			debug("%s granted access ($all/$anonymous)", user?.name);
-			cb(null, true);
-			return;
-		}
-
-		if (this._matchGroups(user, required)) {
-			debug("%s granted access via group match", user?.name);
-			cb(null, true);
-			return;
-		}
-
-		this._logger.warn({ user: user?.name }, "Access denied for @{user}");
-		cb(errorUtils.getForbidden("access denied"), false);
-	}
-
-	/**
-	 * Allow publish if user is in an allowed group.
-	 *
-	 * @see https://verdaccio.org/docs/plugin-auth — allow_publish callback
-	 */
-	public allow_publish(user: RemoteUser, pkg: PackageAccess, cb: pluginUtils.AuthAccessCallback): void {
-		debug("allow_publish for %s, publish list: %o", user?.name, pkg?.publish);
-		const required = pkg?.publish ?? ["$authenticated"];
-
-		if (this._matchGroups(user, required)) {
-			debug("%s granted publish via group match", user?.name);
-			cb(null, true);
-			return;
-		}
-
-		const err = errorUtils.getForbidden("not allowed to publish package");
-		this._logger.error({ user: user?.name }, "@{user} not allowed to publish");
-		debug("%s not allowed to publish: %s", user?.name, err.message);
-		cb(err);
-	}
-
-	/**
-	 * Allow unpublish if user is in an allowed group.
-	 *
-	 * @see https://verdaccio.org/docs/plugin-auth#allow_access-allow_publish-or-allow_unpublish-callback
-	 */
-	public allow_unpublish(user: RemoteUser, pkg: PackageAccess, cb: pluginUtils.AuthAccessCallback): void {
-		const extended = pkg as PackageAccessWithUnpublish;
-		debug("allow_unpublish for %s, unpublish list: %o", user?.name, extended.unpublish);
-		const required = extended.unpublish ?? pkg?.publish ?? ["$authenticated"];
-
-		if (this._matchGroups(user, required)) {
-			debug("%s granted unpublish via group match", user?.name);
-			cb(null, true);
-			return;
-		}
-
-		const err = errorUtils.getForbidden("not allowed to unpublish package");
-		this._logger.error({ user: user?.name }, "@{user} not allowed to unpublish");
-		debug("%s not allowed to unpublish: %s", user?.name, err.message);
-		cb(err);
 	}
 
 	// --- Internals ---
@@ -285,7 +210,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				}
 			}
 		}
-		// All retries exhausted — log clearly, don't swallow
 		this._logger.error(
 			{ authority, tenantId },
 			"OIDC discovery failed after all retries — plugin will reject all auth attempts. " +
@@ -297,11 +221,9 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * Validate an Entra ID JWT: decode → fetch JWKS key → verify signature + claims.
 	 *
 	 * The cryptographic boundary is jwt.verify — ALL claim validation (exp, aud, iss)
-	 * is delegated to the library AFTER signature verification. No unverified claim
-	 * inspection occurs before the signature is checked.
+	 * is delegated to the library AFTER signature verification.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
-		// Wait for OIDC discovery to complete
 		await this._ready;
 		if (!this._jwks || !this._issuer) {
 			throw new JwksServiceError(
@@ -337,8 +259,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			);
 		}
 
-		// Signature verification + claim validation in one step.
-		// jwt.verify checks exp, aud, iss, nbf, and algorithms natively.
 		return new Promise((resolve, reject) => {
 			jwt.verify(
 				token,
@@ -346,7 +266,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				{
 					algorithms: ["RS256"],
 					issuer: this._issuer,
-					audience: `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`,
+					audience: this._audience,
 				},
 				(err, payload) => {
 					if (err) {
@@ -368,19 +288,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		return value.filter((item): item is string => typeof item === "string");
 	}
 
-	/**
-	 * Distinguish service errors (JWKS endpoint down, discovery failed)
-	 * from credential failures (expired token, wrong audience).
-	 * @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
-	 */
 	private _isServiceError(err: unknown): boolean {
 		return err instanceof JwksServiceError;
-	}
-
-	private _matchGroups(user: RemoteUser, required: string[]): boolean {
-		if (required.includes("$all") || required.includes("$anonymous")) return true;
-		if (!user.name) return false;
-		const userGroups = new Set(user.groups ?? []);
-		return required.some((g) => userGroups.has(g));
 	}
 }

@@ -33,18 +33,14 @@ export interface EntraConfig {
 	 * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
 	 */
 	authority?: string;
+	/**
+	 * Expected token audience. Defaults to `api://{clientId}`.
+	 * Override for organizations using custom Application ID URIs
+	 * (e.g., `https://auth.company.com` or a naked client ID GUID).
+	 * Can also be set via ENTRA_AUDIENCE env var.
+	 */
+	audience?: string;
 }
-
-/**
- * Verdaccio's PackageAccess type doesn't include `unpublish` even though
- * config.yaml supports it. This intersection adds it properly instead of
- * casting through `unknown`.
- *
- * @see https://verdaccio.org/docs/best#remove-proxy-to-increase-security-at-private-packages
- */
-export type PackageAccessWithUnpublish = import("@verdaccio/types").PackageAccess & {
-	unpublish?: string[];
-};
 
 /** Claims used by the plugin from a validated Entra ID access token. */
 export interface EntraTokenPayload {
