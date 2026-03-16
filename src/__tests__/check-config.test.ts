@@ -1,17 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execSync } from "node:child_process";
 import path from "node:path";
+import { TEST_TENANT, TEST_CLIENT, MICROSOFT_TENANT } from "./fixtures";
 
 const scriptPath = path.resolve(__dirname, "../../scripts/check-config.ts").replace(/\\/g, "/");
-
-// Microsoft Learn placeholder GUIDs
-// @see https://learn.microsoft.com/entra/identity-platform/reference-app-manifest
-const MS_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
-const MS_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
-
-// Microsoft's public tenant ID — always has a valid JWKS endpoint
-// @see https://login.microsoftonline.com/microsoft.com/v2.0/.well-known/openid-configuration
-const MICROSOFT_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
 
 function run(args: string[] = [], env: Record<string, string> = {}): { stdout: string; exitCode: number } {
 	const cmd = `tsx "${scriptPath}" ${args.join(" ")}`;
@@ -58,20 +50,20 @@ describe("check-config script", () => {
 	});
 
 	it("fails on non-GUID client ID", () => {
-		const { stdout, exitCode } = run(["--client-id", "not-a-guid", "--tenant-id", MS_TENANT]);
+		const { stdout, exitCode } = run(["--client-id", "not-a-guid", "--tenant-id", TEST_TENANT]);
 		expect(exitCode).toBe(1);
 		expect(stdout).toContain("[FAIL] Client ID is a valid GUID");
 		expect(stdout).toContain("not-a-guid");
 	});
 
 	it("fails on non-GUID tenant ID", () => {
-		const { stdout, exitCode } = run(["--client-id", MS_CLIENT, "--tenant-id", "bad"]);
+		const { stdout, exitCode } = run(["--client-id", TEST_CLIENT, "--tenant-id", "bad"]);
 		expect(exitCode).toBe(1);
 		expect(stdout).toContain("[FAIL] Tenant ID is a valid GUID");
 	});
 
 	it("detects identical client and tenant IDs", () => {
-		const { stdout, exitCode } = run(["--client-id", MS_TENANT, "--tenant-id", MS_TENANT]);
+		const { stdout, exitCode } = run(["--client-id", TEST_TENANT, "--tenant-id", TEST_TENANT]);
 		expect(exitCode).toBe(1);
 		expect(stdout).toContain("[FAIL] Client ID and Tenant ID are different");
 		expect(stdout).toContain("pasted the same GUID twice");
@@ -90,14 +82,14 @@ describe("check-config script", () => {
 	it("flags override env vars", () => {
 		const { stdout } = run(
 			["--client-id", "not-a-guid"],
-			{ ENTRA_CLIENT_ID: MS_CLIENT },
+			{ ENTRA_CLIENT_ID: TEST_CLIENT },
 		);
 		expect(stdout).toContain("--client-id flag");
 		expect(stdout).toContain("not-a-guid");
 	});
 
 	it("--quiet suppresses passing checks", () => {
-		const { stdout, exitCode } = run(["--quiet", "--client-id", MS_TENANT, "--tenant-id", MS_TENANT]);
+		const { stdout, exitCode } = run(["--quiet", "--client-id", TEST_TENANT, "--tenant-id", TEST_TENANT]);
 		expect(exitCode).toBe(1);
 		expect(stdout).not.toContain("[PASS]");
 		expect(stdout).toContain("[FAIL]");
@@ -107,7 +99,7 @@ describe("check-config script", () => {
 
 	it("validates JWKS endpoint with Microsoft's public tenant", () => {
 		const { stdout, exitCode } = run([
-			"--client-id", MS_CLIENT,
+			"--client-id", TEST_CLIENT,
 			"--tenant-id", MICROSOFT_TENANT,
 		]);
 		expect(exitCode).toBe(0);
@@ -119,7 +111,7 @@ describe("check-config script", () => {
 
 	it("detects invalid tenant via JWKS endpoint failure", () => {
 		const { stdout, exitCode } = run([
-			"--client-id", MS_CLIENT,
+			"--client-id", TEST_CLIENT,
 			"--tenant-id", "99999999-9999-9999-9999-999999999999",
 		]);
 		expect(exitCode).toBe(1);

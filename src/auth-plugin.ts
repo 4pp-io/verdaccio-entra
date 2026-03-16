@@ -10,8 +10,14 @@ const { Plugin } = pluginUtils;
 
 const debug = debugCore("verdaccio:plugin:entra");
 
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_TOKEN_BYTES = 8192;
+/** @see https://learn.microsoft.com/windows/win32/msi/guid */
+export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const MAX_TOKEN_BYTES = 8192;
+export const AUDIENCE_PREFIX = "api://";
+export const ISSUERS = {
+	v1: (tenantId: string): string => `https://sts.windows.net/${tenantId}/`,
+	v2: (tenantId: string): string => `https://login.microsoftonline.com/${tenantId}/v2.0`,
+} as const;
 
 /** Thrown when the JWKS endpoint is unreachable — a service error, not a credential failure. */
 class JwksServiceError extends Error {
@@ -83,10 +89,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		this._entraConfig = { ...config, clientId, tenantId };
 		this._logger = appOptions.logger;
 		// Accept both v1.0 (access tokens) and v2.0 (id tokens) issuers
-		this._issuers = [`https://sts.windows.net/${tenantId}/`, `https://login.microsoftonline.com/${tenantId}/v2.0`] as [
-			string,
-			...string[],
-		];
+		this._issuers = [ISSUERS.v1(tenantId), ISSUERS.v2(tenantId)] as [string, ...string[]];
 		this._jwks = jwksClient({
 			jwksUri: `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
 			cache: true,
@@ -278,7 +281,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				{
 					algorithms: ["RS256"],
 					issuer: this._issuers,
-					audience: `api://${this._entraConfig.clientId}`,
+					audience: `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`,
 				},
 				(err, payload) => {
 					if (err) {
@@ -306,7 +309,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		if (name === "JsonWebTokenError" && err.message.includes("audience")) {
 			const hint = this._detectSwappedIds(token);
 			return new Error(
-				`Token audience mismatch — expected api://${this._entraConfig.clientId}. ` +
+				`Token audience mismatch — expected ${AUDIENCE_PREFIX}${this._entraConfig.clientId}. ` +
 					(hint ?? "Ensure the MSAL scope matches the Verdaccio app registration."),
 			);
 		}

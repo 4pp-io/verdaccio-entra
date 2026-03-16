@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { PackageAccess, RemoteUser } from "@verdaccio/types";
+import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
 
 // Mock jwks-rsa (required before importing the plugin)
 vi.mock("jwks-rsa", () => ({
@@ -9,9 +10,6 @@ vi.mock("jwks-rsa", () => ({
 }));
 
 import EntraPlugin from "../auth-plugin";
-
-const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
-const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
 
 function createPlugin(): EntraPlugin {
 	return new EntraPlugin(

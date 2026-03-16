@@ -19,8 +19,7 @@
  */
 
 import { parseArgs } from "node:util";
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { GUID_RE, AUDIENCE_PREFIX, ISSUERS } from "../src/auth-plugin";
 
 // --- Parse CLI args (node:util.parseArgs, built-in since Node 18) ---
 const { values: flags } = parseArgs({
@@ -185,7 +184,7 @@ async function main(): Promise<void> {
 			);
 			if (res.ok) {
 				const body = (await res.json()) as { issuer?: string };
-				const expectedIssuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+				const expectedIssuer = ISSUERS.v2(tenantId);
 				check(
 					"Issuer matches tenant ID",
 					body.issuer === expectedIssuer,
@@ -204,7 +203,7 @@ async function main(): Promise<void> {
 
 	// --- 6. Print setup info ---
 	if (GUID_RE.test(clientId)) {
-		const expectedAudience = `api://${clientId}`;
+		const expectedAudience = `${AUDIENCE_PREFIX}${clientId}`;
 		log(`\nExpected token audience: ${expectedAudience}`);
 		log(
 			"Ensure your Entra app registration has this Application ID URI set under\n" +

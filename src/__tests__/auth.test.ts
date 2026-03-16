@@ -1,14 +1,12 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import { TEST_TENANT, TEST_CLIENT, TEST_KID } from "./fixtures";
+import { MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
 
 // --- Test RSA key pair (generated once for all tests) ---
 let privateKey: string;
 let publicKey: string;
-
-const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
-const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
-const TEST_KID = "test-kid-001";
 
 beforeAll(() => {
 	const pair = crypto.generateKeyPairSync("rsa", {
@@ -48,8 +46,8 @@ function signToken(
 function validPayload(overrides?: Record<string, unknown>): Record<string, unknown> {
 	return {
 		preferred_username: "user@contoso.com",
-		iss: `https://sts.windows.net/${TEST_TENANT}/`,
-		aud: `api://${TEST_CLIENT}`,
+		iss: ISSUERS.v1(TEST_TENANT),
+		aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
 		groups: ["developers"],
 		roles: ["registry-admin"],
 		...overrides,
@@ -219,7 +217,7 @@ describe("authenticate", () => {
 	it("handles audience mismatch without tid/aud claims gracefully", async () => {
 		// Token with no tid or aud claims — _detectSwappedIds returns undefined
 		const token = signToken({
-			iss: `https://sts.windows.net/${TEST_TENANT}/`,
+			iss: ISSUERS.v1(TEST_TENANT),
 			preferred_username: "user@contoso.com",
 			// deliberately no aud, no tid
 		});
@@ -249,14 +247,14 @@ describe("authenticate", () => {
 	});
 
 	it("returns false for token exceeding max size (credential failure)", async () => {
-		const oversized = "x".repeat(8193);
+		const oversized = "x".repeat(MAX_TOKEN_BYTES + 1);
 		const result = await authenticateAsync(plugin, "testuser", oversized);
 		expect(result).toBe(false);
 	});
 
 	it("accepts v2.0 issuer", async () => {
 		const token = signToken(
-			validPayload({ iss: `https://login.microsoftonline.com/${TEST_TENANT}/v2.0` }),
+			validPayload({ iss: ISSUERS.v2(TEST_TENANT) }),
 		);
 		const groups = await authenticateAsync(plugin, "testuser", token);
 		expect(groups).toContain("$authenticated");
@@ -325,7 +323,7 @@ describe("adduser", () => {
 	});
 
 	it("returns false for oversized token (credential failure)", async () => {
-		const result = await adduserAsync(plugin, "testuser", "x".repeat(8193));
+		const result = await adduserAsync(plugin, "testuser", "x".repeat(MAX_TOKEN_BYTES + 1));
 		expect(result).toBe(false);
 	});
 
