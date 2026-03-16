@@ -4,7 +4,7 @@ import debugCore from "debug";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 
-import type { EntraConfig, EntraTokenPayload } from "../types/index";
+import type { EntraConfig, EntraTokenPayload, PackageAccessWithUnpublish } from "../types/index";
 
 const { Plugin } = pluginUtils;
 
@@ -143,8 +143,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	/**
 	 * adduser: called by `npm login` / `npm adduser`.
 	 *
-	 * Validates the Entra token and signals success via `cb(null, true)`.
-	 * Verdaccio then calls `authenticate` and issues its own JWT.
+	 * Intentionally mirrors `authenticate` — Entra ID is an external IdP,
+	 * so there is no concept of "registering" a user via npm. This handler
+	 * exists to prevent Verdaccio from returning "plugin does not support
+	 * adduser" when a developer types `npm adduser` instead of `npm login`.
+	 * Both commands result in the same Entra token validation.
 	 *
 	 * @see https://verdaccio.org/docs/plugin-auth — adduser callback
 	 */
@@ -227,9 +230,9 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * @see https://verdaccio.org/docs/plugin-auth#allow_access-allow_publish-or-allow_unpublish-callback
 	 */
 	public allow_unpublish(user: RemoteUser, pkg: PackageAccess, cb: pluginUtils.AuthAccessCallback): void {
-		const pkgAny = pkg as unknown as Record<string, unknown>;
-		debug("allow_unpublish for %s, unpublish list: %o", user?.name, pkgAny?.unpublish);
-		const required = (pkgAny?.unpublish as string[] | undefined) ?? pkg?.publish ?? ["$authenticated"];
+		const extended = pkg as PackageAccessWithUnpublish;
+		debug("allow_unpublish for %s, unpublish list: %o", user?.name, extended.unpublish);
+		const required = extended.unpublish ?? pkg?.publish ?? ["$authenticated"];
 
 		if (this._matchGroups(user, required)) {
 			debug("%s granted unpublish via group match", user?.name);
@@ -274,6 +277,31 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		}
 		const publicKey = key.getPublicKey();
 
+		// Pre-check claims on the decoded (unverified) token to produce
+		// actionable error messages without string-matching library errors.
+		// Then verify the signature to ensure cryptographic validity.
+		// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+		const expectedAudience = `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`;
+		const claims = decoded.payload as EntraTokenPayload;
+		const swapHint = this._detectSwappedIds(claims);
+
+		if (claims.exp && claims.exp < Math.floor(Date.now() / 1000)) {
+			throw new Error("Entra ID token has expired. Obtain a fresh access token via MSAL and run npm login again.");
+		}
+		if (claims.aud && claims.aud !== expectedAudience) {
+			throw new Error(
+				`Token audience mismatch — expected ${expectedAudience}, got ${claims.aud}. ` +
+					(swapHint ?? "Ensure the MSAL scope matches the Verdaccio app registration."),
+			);
+		}
+		if (claims.iss && !this._issuers.includes(claims.iss)) {
+			throw new Error(
+				`Token issuer mismatch — expected tenant ${this._entraConfig.tenantId}, got ${claims.iss}. ` +
+					(swapHint ?? "Ensure the token was issued by the correct Entra tenant."),
+			);
+		}
+
+		// Claims look correct — now verify the cryptographic signature
 		return new Promise((resolve, reject) => {
 			jwt.verify(
 				token,
@@ -281,11 +309,14 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				{
 					algorithms: ["RS256"],
 					issuer: this._issuers,
-					audience: `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`,
+					audience: expectedAudience,
 				},
 				(err, payload) => {
 					if (err) {
-						return reject(this._mapJwtError(err, token));
+						if (err.name === "NotBeforeError") {
+							return reject(new Error("Entra ID token is not yet valid (nbf claim is in the future). Check server clock sync."));
+						}
+						return reject(new Error(`Entra token validation failed: ${err.message}`));
 					}
 					resolve(payload as EntraTokenPayload);
 				},
@@ -294,61 +325,19 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	/**
-	 * Map JWT verification errors to actionable user messages.
-	 *
-	 * Detects common misconfigurations like swapped clientId/tenantId by
-	 * peeking at the raw token claims and comparing against config.
-	 *
-	 * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-	 */
-	private _mapJwtError(err: jwt.VerifyErrors, token?: string): Error {
-		const name = err.name;
-		if (name === "TokenExpiredError") {
-			return new Error("Entra ID token has expired. Obtain a fresh access token via MSAL and run npm login again.");
-		}
-		if (name === "JsonWebTokenError" && err.message.includes("audience")) {
-			const hint = this._detectSwappedIds(token);
-			return new Error(
-				`Token audience mismatch — expected ${AUDIENCE_PREFIX}${this._entraConfig.clientId}. ` +
-					(hint ?? "Ensure the MSAL scope matches the Verdaccio app registration."),
-			);
-		}
-		if (name === "JsonWebTokenError" && err.message.includes("issuer")) {
-			const hint = this._detectSwappedIds(token);
-			return new Error(
-				`Token issuer mismatch — expected tenant ${this._entraConfig.tenantId}. ` +
-					(hint ?? "Ensure the token was issued by the correct Entra tenant."),
-			);
-		}
-		if (name === "NotBeforeError") {
-			return new Error("Entra ID token is not yet valid (nbf claim is in the future). Check server clock sync.");
-		}
-		return new Error(`Entra token validation failed: ${err.message}`);
-	}
-
-	/**
-	 * Peek at raw token claims to detect if clientId and tenantId are swapped.
+	 * Detect if clientId and tenantId are swapped by inspecting token claims.
 	 *
 	 * Entra access tokens contain:
 	 *   - `aud`: the audience — should match `api://{clientId}` or the clientId GUID
 	 *   - `tid`: the tenant ID GUID
-	 *   - `iss`: contains the tenant ID in the URL path
-	 *   - `appid`/`azp`: the calling application's client ID
 	 *
 	 * If `tid` matches the configured clientId, or `aud` contains the configured
 	 * tenantId, the user likely swapped the two values.
 	 *
 	 * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference#payload-claims
 	 */
-	private _detectSwappedIds(token?: string): string | undefined {
-		if (!token) return undefined;
-		// jwt.decode returns null for unparseable tokens — never throws
-		const decoded = jwt.decode(token);
-		if (!decoded || typeof decoded === "string") return undefined;
-		const claims = decoded as Record<string, unknown>;
-		const tid = typeof claims["tid"] === "string" ? claims["tid"] : undefined;
-		const aud = typeof claims["aud"] === "string" ? claims["aud"] : undefined;
-
+	private _detectSwappedIds(claims: EntraTokenPayload): string | undefined {
+		const tid = typeof claims["tid"] === "string" ? (claims["tid"] as string) : undefined;
 		const { clientId, tenantId } = this._entraConfig;
 
 		// tid matches our clientId → they put the client ID where tenant ID should be
@@ -357,8 +346,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
 		}
 		// aud contains our tenantId → they put the tenant ID where client ID should be
-		if (aud && aud.toLowerCase().includes(tenantId.toLowerCase())) {
-			return `It looks like clientId and tenantId may be swapped — the token's audience (${aud}) contains your configured tenantId. ` +
+		if (claims.aud && claims.aud.toLowerCase().includes(tenantId.toLowerCase())) {
+			return `It looks like clientId and tenantId may be swapped — the token's audience (${claims.aud}) contains your configured tenantId. ` +
 				"Check ENTRA_CLIENT_ID and ENTRA_TENANT_ID.";
 		}
 		return undefined;

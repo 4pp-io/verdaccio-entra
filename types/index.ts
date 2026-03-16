@@ -16,6 +16,17 @@ export interface EntraConfig {
 	tenantId: string;
 }
 
+/**
+ * Verdaccio's PackageAccess type doesn't include `unpublish` even though
+ * config.yaml supports it. This intersection adds it properly instead of
+ * casting through `unknown`.
+ *
+ * @see https://verdaccio.org/docs/best#remove-proxy-to-increase-security-at-private-packages
+ */
+export type PackageAccessWithUnpublish = import("@verdaccio/types").PackageAccess & {
+	unpublish?: string[];
+};
+
 /** Claims used by the plugin from a validated Entra ID access token. */
 export interface EntraTokenPayload {
 	preferred_username?: string;
