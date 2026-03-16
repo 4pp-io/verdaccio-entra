@@ -1,0 +1,55 @@
+# Verdaccio config with Entra ID auth
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+
+web:
+  title: "@ve Private Registry"
+  favicon: ""
+  gravatar: true
+
+auth:
+  entra:
+    clientId: "${ENTRA_CLIENT_ID}"
+    tenantId: "${ENTRA_TENANT_ID}"
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    cache: true
+
+packages:
+  "@ve/*":
+    access: $authenticated
+    publish: $authenticated
+    unpublish: $authenticated
+
+  "@*/*":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+
+  "**":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+
+server:
+  keepAliveTimeout: 60
+
+security:
+  api:
+    jwt:
+      sign:
+        expiresIn: 30d
+
+middlewares:
+  audit:
+    enabled: true
+
+listen:
+  - 0.0.0.0:4873
+
+log:
+  type: stdout
+  format: pretty
+  level: info

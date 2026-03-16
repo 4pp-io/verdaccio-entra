@@ -1,0 +1,57 @@
+{
+	"name": "verdaccio-entra",
+	"version": "1.0.0",
+	"description": "Microsoft Entra ID (Azure AD) auth plugin for Verdaccio — validates access tokens via JWKS",
+	"main": "lib/src/index.js",
+	"types": "lib/src/index.d.ts",
+	"engines": {
+		"node": ">=18"
+	},
+	"dependencies": {
+		"@verdaccio/core": "8.0.0-next-8.30",
+		"@verdaccio/config": "8.0.0-next-8.30",
+		"debug": "4.4.3",
+		"jsonwebtoken": "^9.0.3",
+		"jwks-rsa": "^4.0.1"
+	},
+	"devDependencies": {
+		"@types/node": "25.0.9",
+		"@types/express": "4.17.25",
+		"@types/debug": "4.1.12",
+		"typescript": "5.9.3",
+		"@verdaccio/types": "13.0.0-next-8.10",
+		"@types/jsonwebtoken": "9.0.10",
+		"@verdaccio/auth": "8.0.0-next-8.30"
+	},
+	"keywords": [
+		"verdaccio",
+		"verdaccio-plugin",
+		"verdaccio-auth",
+		"verdaccio-auth-plugin",
+		"plugin",
+		"auth",
+		"authentication",
+		"entra",
+		"entra-id",
+		"microsoft-entra",
+		"azure-ad",
+		"azure",
+		"active-directory",
+		"oidc",
+		"oauth",
+		"npm",
+		"registry",
+		"enterprise",
+		"sso"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/4pp-io/verdaccio-entra.git"
+	},
+	"author": "primeinc <vincit.omnia.veritas@lellirose.com>",
+	"scripts": {
+		"build": "tsc",
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}
