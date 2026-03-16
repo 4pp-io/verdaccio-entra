@@ -1,19 +1,16 @@
 /**
  * Anti-pattern tests — enforce architectural invariants via source scanning.
  *
- * These tests grep the actual source files to prevent regressions on
- * patterns that linters can't easily catch.
+ * These are guardrails, not unit tests. They grep source files to catch
+ * patterns that slip past linters and type-checkers. Organized by the
+ * principle being protected, not the specific bug that introduced them.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
 const srcDir = path.resolve(__dirname, "..");
-
-function readSource(filename: string): string {
-	return fs.readFileSync(path.join(srcDir, filename), "utf-8");
-}
 
 function sourceFiles(): string[] {
 	return fs.readdirSync(srcDir)
@@ -21,85 +18,155 @@ function sourceFiles(): string[] {
 		.filter((f) => !f.startsWith("__"));
 }
 
-describe("anti-patterns", () => {
-	it("source files never use bare global fetch — must use undici or injected fetcher", () => {
-		// Bare fetch() bypasses HTTP_PROXY/HTTPS_PROXY on Node 22.
-		// All network calls must go through undici's fetch (with proxy dispatcher)
-		// or an injected fetcher parameter.
-		//
-		// Allowed:
-		//   import { fetch as undiciFetch } from "undici"  ← proxy-aware
-		//   fetcher = fetch  ← parameter default in check-config (injected in tests)
-		//   typeof fetch     ← type annotation only
-		//
-		// Banned:
-		//   await fetch(url)          ← bare global fetch, no proxy
-		//   const res = fetch(url)    ← same
-		//
-		// The regex matches `fetch(` that is NOT preceded by a word character
-		// (to avoid matching `undiciFetch(` or `mockFetch(` or `fetcher(`).
-		const bareCallPattern = /(?<!\w)fetch\s*\(/g;
-		const allowedContexts = [
-			"typeof fetch",      // Type annotations
-			"fetcher = fetch",   // Default parameter (injected in prod, mocked in tests)
-			"as undiciFetch",    // Import alias
-			"fetch as",          // Import alias
-		];
+function forEachSourceLine(cb: (file: string, line: string, lineNum: number) => void): void {
+	for (const file of sourceFiles()) {
+		const lines = fs.readFileSync(path.join(srcDir, file), "utf-8").split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			cb(file, lines[i] ?? "", i + 1);
+		}
+	}
+}
 
-		for (const file of sourceFiles()) {
-			const content = readSource(file);
-			const lines = content.split("\n");
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i] ?? "";
-				if (!bareCallPattern.test(line)) continue;
-				// Reset lastIndex for stateful regex
-				bareCallPattern.lastIndex = 0;
+function fail(file: string, line: number, rule: string, detail: string): never {
+	throw new Error(`${file}:${line} — ${rule}\n  ${detail}`);
+}
 
-				const isAllowed = allowedContexts.some((ctx) => line.includes(ctx));
-				if (!isAllowed) {
-					throw new Error(
-						`${file}:${i + 1} uses bare global fetch() which bypasses HTTP_PROXY. ` +
-							"Use undici's fetch with the scoped proxy agent, or accept a fetcher parameter.\n" +
-							`  Line: ${line.trim()}`,
-					);
+// === Principle: Plugins are guests in the host process ===
+
+describe("process isolation", () => {
+	it("no global state mutation (setGlobalDispatcher, global assignments)", () => {
+		forEachSourceLine((file, line, num) => {
+			if (/setGlobalDispatcher|globalThis\.\w+\s*=/.test(line) && !line.trim().startsWith("//")) {
+				fail(file, num, "no global mutation", line.trim());
+			}
+		});
+	});
+
+	it("no process.env writes", () => {
+		forEachSourceLine((file, line, num) => {
+			if (/process\.env\s*\[.*\]\s*=/.test(line)) {
+				fail(file, num, "no env mutation", line.trim());
+			}
+		});
+	});
+
+	it("no console output — use the host framework's structured logger", () => {
+		forEachSourceLine((file, line, num) => {
+			if (/\bconsole\.(log|warn|error|info|debug)\s*\(/.test(line) && !line.trim().startsWith("//")) {
+				fail(file, num, "no console — use this._logger", line.trim());
+			}
+		});
+	});
+});
+
+// === Principle: Network calls must be proxy-aware ===
+
+describe("proxy safety", () => {
+	it("no bare global fetch() — must use proxy-aware fetcher", () => {
+		const allowed = ["typeof fetch", "fetcher = fetch", "as undiciFetch", "fetch as"];
+		const pattern = /(?<!\w)fetch\s*\(/g;
+
+		forEachSourceLine((file, line, num) => {
+			if (!pattern.test(line)) return;
+			pattern.lastIndex = 0;
+			if (!allowed.some((a) => line.includes(a))) {
+				fail(file, num, "no bare fetch — use undici with proxy dispatcher", line.trim());
+			}
+		});
+	});
+});
+
+// === Principle: Respect framework boundaries ===
+
+describe("framework compliance", () => {
+	it("no authorization hooks — the host framework handles authz from authenticate() groups", () => {
+		const banned = ["allow_access", "allow_publish", "allow_unpublish", "adduser"];
+		forEachSourceLine((file, line, num) => {
+			for (const method of banned) {
+				if (new RegExp(`\\b${method}\\s*\\(`).test(line)) {
+					fail(file, num, `no ${method}() — framework handles this natively`, line.trim());
 				}
 			}
-		}
+		});
+	});
+});
+
+// === Principle: Cryptographic boundaries are sacred ===
+
+describe("cryptographic hygiene", () => {
+	it("no string-matching on dependency error messages for control flow", () => {
+		// diagnostics.ts is exempt — it enriches logs post-verification, not auth decisions
+		const exemptFiles = new Set(["diagnostics.ts"]);
+		forEachSourceLine((file, line, num) => {
+			if (exemptFiles.has(file)) return;
+			if (/err\.message\.includes\(/.test(line)) {
+				fail(file, num, "no error string matching — use typed errors or error.name", line.trim());
+			}
+		});
+	});
+});
+
+// === Principle: Type safety has no escape hatches ===
+
+describe("type safety", () => {
+	it("no double-casting through unknown (as unknown as)", () => {
+		forEachSourceLine((file, line, num) => {
+			if (/as unknown as/.test(line)) {
+				fail(file, num, "no double-cast — use intersection types or proper generics", line.trim());
+			}
+		});
+	});
+});
+
+// === Principle: No hardcoded environment assumptions ===
+
+describe("portability", () => {
+	it("no hardcoded cloud provider URLs outside of exported defaults", () => {
+		const urlPattern = /login\.microsoftonline\.(com|us|cn)|sts\.windows\.net/;
+		const allowedContexts = ["export const", "DEFAULT_AUTHORITY", ".replace("];
+
+		forEachSourceLine((file, line, num) => {
+			if (!urlPattern.test(line)) return;
+			if (allowedContexts.some((ctx) => line.includes(ctx))) return;
+			if (line.trim().startsWith("//") || line.trim().startsWith("*")) return;
+			fail(file, num, "no hardcoded authority URLs — use configurable defaults", line.trim());
+		});
 	});
 
-	it("source files never use setGlobalDispatcher — proxy must be scoped", () => {
-		for (const file of sourceFiles()) {
-			const content = readSource(file);
-			expect(content).not.toContain("setGlobalDispatcher");
-		}
+	it("no hardcoded absolute filesystem paths", () => {
+		forEachSourceLine((file, line, num) => {
+			if (line.trim().startsWith("//") || line.trim().startsWith("*")) return;
+			if (/["'`]\/usr\/|["'`]\/opt\/|["'`]\/verdaccio\/|["'`][A-Z]:\\/.test(line)) {
+				fail(file, num, "no absolute paths — use relative paths or config", line.trim());
+			}
+		});
 	});
+});
 
-	it("source files never implement allow_access/allow_publish/allow_unpublish — Verdaccio handles authz", () => {
-		// These are AuthZ hooks that Verdaccio handles natively from the groups
-		// returned by authenticate(). Implementing them in an AuthN plugin breaks
-		// user-level package access controls.
-		const bannedMethods = ["allow_access", "allow_publish", "allow_unpublish"];
+// === Principle: Errors are never silently swallowed ===
+
+describe("error handling", () => {
+	it("catch blocks always escalate or are explicitly marked as diagnostic", () => {
+		// Security-critical code (auth-plugin) must escalate: throw, reject, cb(error), or logger.error.
+		// Diagnostic code (check-config, diagnostics) may record-and-continue IF the catch block
+		// contains the marker comment "diagnostic: error recorded in results" to prove intent.
+		//
+		// This prevents silent swallowing while allowing diagnostic tools to
+		// collect multiple failures in a single run.
+		const escalationPattern = /throw\b|reject\(|cb\(|this\._logger\.error/;
+		const diagnosticMarker = /diagnostic: error recorded/;
+
 		for (const file of sourceFiles()) {
-			const content = readSource(file);
-			for (const method of bannedMethods) {
-				const methodPattern = new RegExp(`\\b${method}\\s*\\(`, "g");
-				if (methodPattern.test(content)) {
+			const content = fs.readFileSync(path.join(srcDir, file), "utf-8");
+			const catchBlocks = content.match(/catch\s*\([^)]*\)\s*\{[^}]*\}/gs) ?? [];
+			for (const block of catchBlocks) {
+				const escalates = escalationPattern.test(block);
+				const markedDiagnostic = diagnosticMarker.test(block);
+				if (!escalates && !markedDiagnostic) {
 					throw new Error(
-						`${file} implements ${method}() — this is an AuthZ hook that Verdaccio handles natively. ` +
-							"The plugin should only implement authenticate() and return groups.",
+						`${file} has a catch block that neither escalates nor is marked diagnostic:\n  ${block.slice(0, 200)}`,
 					);
 				}
-			}
-		}
-	});
-
-	it("source files never mutate process.env", () => {
-		for (const file of sourceFiles()) {
-			const content = readSource(file);
-			if (/process\.env\s*\[.*\]\s*=/.test(content)) {
-				throw new Error(
-					`${file} mutates process.env — plugins must not modify the host process environment.`,
-				);
 			}
 		}
 	});

@@ -94,6 +94,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 				);
 			}
 		} catch (err) {
+			// diagnostic: error recorded in results — caller decides exit code
 			check(
 				"JWKS endpoint is reachable",
 				false,
@@ -123,6 +124,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 				);
 			}
 		} catch (err) {
+			// diagnostic: error recorded in results — caller decides exit code
 			check(
 				"OpenID Connect discovery is reachable",
 				false,
