@@ -15,9 +15,23 @@ const debug = debugCore("verdaccio:plugin:entra");
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_TOKEN_BYTES = 8192;
 export const AUDIENCE_PREFIX = "api://";
+
+/**
+ * Default Azure Public cloud authority.
+ * Override with `authority` config for sovereign clouds.
+ * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
+ */
+export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
+
+/**
+ * Known Entra issuer URL patterns (used by diagnostics and check-config).
+ * The plugin itself resolves issuers dynamically via OIDC discovery.
+ */
 export const ISSUERS = {
-	v1: (tenantId: string): string => `https://sts.windows.net/${tenantId}/`,
-	v2: (tenantId: string): string => `https://login.microsoftonline.com/${tenantId}/v2.0`,
+	v1: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
+		`${authority.replace("login.microsoftonline.com", "sts.windows.net")}/${tenantId}/`,
+	v2: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
+		`${authority}/${tenantId}/v2.0`,
 } as const;
 
 /** Thrown when the JWKS endpoint is unreachable — a service error, not a credential failure. */
@@ -39,6 +53,29 @@ function assertGuid(value: string, label: string): void {
 	}
 }
 
+/** OIDC discovery response shape (subset we need) */
+interface OidcDiscovery {
+	issuer: string;
+	jwks_uri: string;
+}
+
+/**
+ * Fetch OIDC discovery document to dynamically resolve JWKS endpoint and issuer.
+ * This supports all sovereign/national clouds without hardcoding endpoints.
+ * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
+ */
+async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
+	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
+	const res = await fetch(url);
+	if (!res.ok) {
+		throw new Error(
+			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
+				"Verify your tenantId and authority are correct.",
+		);
+	}
+	return res.json() as Promise<OidcDiscovery>;
+}
+
 /**
  * Verdaccio auth plugin that validates Entra ID (Azure AD) access tokens
  * using Verdaccio's **native login flow**.
@@ -56,53 +93,64 @@ function assertGuid(value: string, label: string): void {
  * 6. Subsequent requests carry Verdaccio's JWT — Verdaccio validates it
  *    internally and populates `req.remote_user`. No middleware needed.
  *
- * ### Why no apiJWTmiddleware?
- * The previous implementation bypassed Verdaccio's login flow by writing
- * the raw Entra JWT directly as the auth token. Verdaccio couldn't
- * decrypt it (it didn't issue it), so apiJWTmiddleware was needed to
- * intercept every request. With the native flow, Verdaccio manages its
- * own token lifecycle — authenticate once, then Verdaccio handles the rest.
- *
- * ### Required Verdaccio config (config.yaml):
+ * ### Sovereign cloud support
+ * Set `authority` in config to use national clouds:
  * ```yaml
- * security:
- *   api:
- *     jwt:
- *       sign:
- *         expiresIn: 7d   # fintech default; adjust per your policy
+ * auth:
+ *   entra:
+ *     clientId: "..."
+ *     tenantId: "..."
+ *     authority: "https://login.microsoftonline.us"  # US Government
  * ```
+ * The plugin uses OIDC discovery to resolve the JWKS endpoint and issuer
+ * dynamically, so it works with any Entra-compatible authority.
+ * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
 	private _logger: Logger;
-	private _jwks: jwksClient.JwksClient;
-	private _issuers: [string, ...string[]];
+	private _jwks: jwksClient.JwksClient | undefined;
+	private _issuer: string | undefined;
 	private _entraConfig: EntraConfig;
+	private _ready: Promise<void>;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
-		// Env vars take precedence over config.yaml values.
-		// Verdaccio does NOT resolve ${VAR} patterns in plugin config —
-		// so we read env vars directly rather than hand-rolling interpolation.
 		const clientId = process.env["ENTRA_CLIENT_ID"] ?? config.clientId;
 		const tenantId = process.env["ENTRA_TENANT_ID"] ?? config.tenantId;
+		const authority = process.env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
 		assertGuid(clientId, "clientId");
 		assertGuid(tenantId, "tenantId");
-		this._entraConfig = { ...config, clientId, tenantId };
+		this._entraConfig = { ...config, clientId, tenantId, authority };
 		this._logger = appOptions.logger;
-		// Accept both v1.0 (access tokens) and v2.0 (id tokens) issuers
-		this._issuers = [ISSUERS.v1(tenantId), ISSUERS.v2(tenantId)] as [string, ...string[]];
-		this._jwks = jwksClient({
-			jwksUri: `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
-			cache: true,
-			cacheMaxAge: 600_000, // 10 min
-		});
-		debug("EntraPlugin initialized for tenant %s, clientId %s", tenantId, clientId);
+
+		// OIDC discovery resolves jwks_uri and issuer dynamically.
+		// This supports all sovereign clouds without hardcoded endpoints.
+		this._ready = discoverOidc(authority, tenantId)
+			.then((discovery) => {
+				this._issuer = discovery.issuer;
+				this._jwks = jwksClient({
+					jwksUri: discovery.jwks_uri,
+					cache: true,
+					cacheMaxAge: 600_000, // 10 min
+					rateLimit: true, // Prevent kid-spoofing DoS
+					jwksRequestsPerMinute: 10,
+				});
+				debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
+			})
+			.catch((err) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				this._logger.error({ err: msg }, "OIDC discovery failed: @{err}");
+				debug("OIDC discovery failed: %s", msg);
+				// Plugin will reject all auth attempts until discovery succeeds
+			});
+
+		debug("EntraPlugin initializing for tenant %s, authority %s", tenantId, authority);
 	}
 
 	/**
 	 * Authenticate: validate the Entra JWT passed as the password field.
 	 *
-	 * Called by Verdaccio during `npm login` / `npm adduser`.
+	 * Called by Verdaccio during `npm login`.
 	 * On success, returns groups via `cb(null, groups)`.
 	 * Verdaccio then issues its own JWT to the client.
 	 *
@@ -111,8 +159,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	public authenticate(user: string, password: string, cb: pluginUtils.AuthCallback): void {
 		debug("Authenticating user: %s", user);
 		if (password.length > MAX_TOKEN_BYTES) {
-			// Not a valid Entra token — let next auth plugin try
-			// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-fails
 			cb(null, false);
 			return;
 		}
@@ -122,7 +168,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				const groups = this._extractGroups(payload);
 				this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
 				debug("User %s authenticated, groups: %o", upn, groups);
-				// Per docs: cb(null, groups) signals success — Verdaccio issues its own token
 				cb(null, groups);
 			})
 			.catch((err) => {
@@ -130,18 +175,12 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
 				debug("Authentication failed for %s: %s", user, msg);
 				if (this._isServiceError(err)) {
-					// JWKS endpoint unreachable — service error, stop plugin chain
-					// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
 					cb(errorUtils.getInternalError(msg));
 				} else {
-					// Wrong credentials (expired, bad audience, not a JWT, etc.) — let next plugin try
-					// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-fails
 					cb(null, false);
 				}
 			});
 	}
-
-
 
 	/**
 	 * Allow access if user is in an allowed group (or access is open).
@@ -220,11 +259,17 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * The cryptographic boundary is jwt.verify — ALL claim validation (exp, aud, iss)
 	 * is delegated to the library AFTER signature verification. No unverified claim
 	 * inspection occurs before the signature is checked.
-	 *
-	 * Diagnostic enrichment (swap detection, friendly messages) happens only in the
-	 * catch path via diagnostics.ts and is used for logging, never for auth decisions.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
+		// Wait for OIDC discovery to complete
+		await this._ready;
+		if (!this._jwks || !this._issuer) {
+			throw new JwksServiceError(
+				"Plugin not ready — OIDC discovery has not completed. " +
+					"Check the authority URL and tenant ID.",
+			);
+		}
+
 		const decoded = jwt.decode(token, { complete: true });
 		if (!decoded || typeof decoded === "string") {
 			throw new Error(
@@ -260,14 +305,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				key.getPublicKey(),
 				{
 					algorithms: ["RS256"],
-					issuer: this._issuers,
+					issuer: this._issuer,
 					audience: `${AUDIENCE_PREFIX}${this._entraConfig.clientId}`,
 				},
 				(err, payload) => {
 					if (err) {
-						// Enrich the error with diagnostic context for logging.
-						// This runs AFTER verification — the signature was checked,
-						// so peeking at claims here is safe (for DX, not auth).
 						const enriched = enrichVerifyError(err, token, this._entraConfig);
 						return reject(new Error(enriched));
 					}
@@ -287,9 +329,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	/**
-	 * Distinguish service errors (JWKS endpoint down) from credential failures
-	 * (expired token, wrong audience). Service errors stop the plugin chain;
-	 * credential failures let the next plugin try.
+	 * Distinguish service errors (JWKS endpoint down, discovery failed)
+	 * from credential failures (expired token, wrong audience).
 	 * @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
 	 */
 	private _isServiceError(err: unknown): boolean {

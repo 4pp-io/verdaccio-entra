@@ -1,6 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import type { PackageAccess, RemoteUser } from "@verdaccio/types";
 import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
+import { ISSUERS } from "../auth-plugin";
+
+// Mock fetch for OIDC discovery
+vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+	ok: true,
+	json: () => Promise.resolve({
+		issuer: ISSUERS.v2(TEST_TENANT),
+		jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
+	}),
+}));
 
 // Mock jwks-rsa (required before importing the plugin)
 vi.mock("jwks-rsa", () => ({

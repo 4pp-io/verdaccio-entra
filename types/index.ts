@@ -14,6 +14,19 @@
 export interface EntraConfig {
 	clientId: string;
 	tenantId: string;
+	/**
+	 * Optional Entra authority URL. Defaults to Azure Public cloud.
+	 * Set this for sovereign/national clouds:
+	 *   - US Government: https://login.microsoftonline.us
+	 *   - China (21Vianet): https://login.partner.microsoftonline.cn
+	 *   - Public (default): https://login.microsoftonline.com
+	 *
+	 * The plugin appends /{tenantId}/v2.0/.well-known/openid-configuration
+	 * to discover the JWKS endpoint and valid issuers dynamically.
+	 *
+	 * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
+	 */
+	authority?: string;
 }
 
 /**

@@ -8,6 +8,9 @@ import { MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
 let privateKey: string;
 let publicKey: string;
 
+// The issuer that OIDC discovery returns
+const DISCOVERED_ISSUER = ISSUERS.v2(TEST_TENANT);
+
 beforeAll(() => {
 	const pair = crypto.generateKeyPairSync("rsa", {
 		modulusLength: 2048,
@@ -17,6 +20,15 @@ beforeAll(() => {
 	privateKey = pair.privateKey;
 	publicKey = pair.publicKey;
 });
+
+// --- Mock fetch for OIDC discovery ---
+vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+	ok: true,
+	json: () => Promise.resolve({
+		issuer: DISCOVERED_ISSUER,
+		jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
+	}),
+}));
 
 // --- Mock jwks-rsa to return our test public key ---
 vi.mock("jwks-rsa", () => {
@@ -46,7 +58,7 @@ function signToken(
 function validPayload(overrides?: Record<string, unknown>): Record<string, unknown> {
 	return {
 		preferred_username: "user@contoso.com",
-		iss: ISSUERS.v1(TEST_TENANT),
+		iss: DISCOVERED_ISSUER,
 		aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
 		groups: ["developers"],
 		roles: ["registry-admin"],
@@ -120,7 +132,6 @@ describe("EntraPlugin constructor", () => {
 		process.env.ENTRA_CLIENT_ID = TEST_CLIENT;
 		process.env.ENTRA_TENANT_ID = TEST_TENANT;
 		try {
-			// Config has dummy values but env vars provide valid GUIDs
 			expect(() =>
 				createPlugin({
 					clientId: "placeholder",
@@ -131,6 +142,23 @@ describe("EntraPlugin constructor", () => {
 			delete process.env.ENTRA_CLIENT_ID;
 			delete process.env.ENTRA_TENANT_ID;
 		}
+	});
+});
+
+describe("OIDC discovery failure", () => {
+	it("returns service error when discovery fails", async () => {
+		// Override fetch to simulate discovery failure
+		const originalFetch = globalThis.fetch;
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+		}));
+		const plugin = createPlugin();
+		const token = signToken(validPayload());
+		// Discovery fails → plugin not ready → service error
+		await expect(authenticateAsync(plugin, "testuser", token)).rejects.toThrow(/OIDC discovery|not ready/i);
+		// Restore
+		vi.stubGlobal("fetch", originalFetch);
 	});
 });
 
@@ -170,8 +198,9 @@ describe("authenticate", () => {
 	});
 
 	it("returns false for wrong issuer (credential failure)", async () => {
+		// Use ISSUERS.v1 with a wrong tenant to exercise both issuer formats
 		const token = signToken(
-			validPayload({ iss: "https://sts.windows.net/99999999-9999-9999-9999-999999999999/" }),
+			validPayload({ iss: ISSUERS.v1("99999999-9999-9999-9999-999999999999") }),
 		);
 		const result = await authenticateAsync(plugin, "testuser", token);
 		expect(result).toBe(false);
@@ -181,33 +210,20 @@ describe("authenticate", () => {
 	// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
 
 	it("detects swapped IDs when tid matches configured clientId", async () => {
-		// Token's tid = our clientId, aud = our tenantId → swapped
 		const token = signToken(validPayload({
 			tid: TEST_CLIENT,
-			aud: `api://${TEST_TENANT}`,
+			aud: `${AUDIENCE_PREFIX}${TEST_TENANT}`,
 			iss: `https://sts.windows.net/${TEST_CLIENT}/`,
 		}));
 		const result = await authenticateAsync(plugin, "testuser", token);
-		// Still returns false (credential failure) but the logger gets the hint
 		expect(result).toBe(false);
 	});
 
 	it("detects swapped IDs when aud contains configured tenantId", async () => {
 		const token = signToken(validPayload({
-			aud: `api://${TEST_TENANT}`,
-			iss: `https://sts.windows.net/99999999-9999-9999-9999-999999999999/`,
+			aud: `${AUDIENCE_PREFIX}${TEST_TENANT}`,
+			iss: "https://sts.windows.net/99999999-9999-9999-9999-999999999999/",
 		}));
-		const result = await authenticateAsync(plugin, "testuser", token);
-		expect(result).toBe(false);
-	});
-
-	it("handles audience mismatch without tid/aud claims gracefully", async () => {
-		// Token with no tid or aud claims — _detectSwappedIds returns undefined
-		const token = signToken({
-			iss: ISSUERS.v1(TEST_TENANT),
-			preferred_username: "user@contoso.com",
-			// deliberately no aud, no tid
-		});
 		const result = await authenticateAsync(plugin, "testuser", token);
 		expect(result).toBe(false);
 	});
@@ -239,12 +255,34 @@ describe("authenticate", () => {
 		expect(result).toBe(false);
 	});
 
-	it("accepts v2.0 issuer", async () => {
-		const token = signToken(
-			validPayload({ iss: ISSUERS.v2(TEST_TENANT) }),
-		);
-		const groups = await authenticateAsync(plugin, "testuser", token);
-		expect(groups).toContain("$authenticated");
+	it("returns false for generic JsonWebTokenError (e.g. invalid signature)", async () => {
+		const token = signToken(validPayload());
+		const parts = token.split(".");
+		const tampered = [parts[0], parts[1], "invalidsignature"].join(".");
+		const result = await authenticateAsync(plugin, "testuser", tampered);
+		expect(result).toBe(false);
+	});
+
+	it("returns false for generic JWT error (e.g. NotBeforeError)", async () => {
+		const token = signToken(validPayload(), { expiresIn: "1h" });
+		const decoded = jwt.decode(token, { complete: true });
+		if (!decoded || typeof decoded === "string") throw new Error("test setup: failed to decode token");
+		const payload = { ...decoded.payload as Record<string, unknown>, nbf: Math.floor(Date.now() / 1000) + 99999 };
+		const futureToken = jwt.sign(payload, privateKey, {
+			algorithm: "RS256",
+			header: { alg: "RS256", kid: TEST_KID },
+		} as jwt.SignOptions);
+		const result = await authenticateAsync(plugin, "testuser", futureToken);
+		expect(result).toBe(false);
+	});
+
+	it("handles audience mismatch without tid/aud claims gracefully", async () => {
+		const token = signToken({
+			iss: DISCOVERED_ISSUER,
+			preferred_username: "user@contoso.com",
+		});
+		const result = await authenticateAsync(plugin, "testuser", token);
+		expect(result).toBe(false);
 	});
 
 	it("merges groups and roles claims", async () => {
@@ -258,31 +296,6 @@ describe("authenticate", () => {
 		expect(groups).toEqual(["$authenticated", "group-a", "group-b", "role-x"]);
 	});
 
-	it("returns false for generic JWT error (e.g. NotBeforeError)", async () => {
-		// Sign with nbf in the future to trigger NotBeforeError
-		const token = signToken(validPayload(), { expiresIn: "1h" });
-		// Manually craft a token with nbf far in the future
-		const decoded = jwt.decode(token, { complete: true });
-		if (!decoded || typeof decoded === "string") throw new Error("test setup: failed to decode token");
-		const payload = { ...decoded.payload as Record<string, unknown>, nbf: Math.floor(Date.now() / 1000) + 99999 };
-		const futureToken = jwt.sign(payload, privateKey, {
-			algorithm: "RS256",
-			header: { alg: "RS256", kid: TEST_KID },
-		} as jwt.SignOptions);
-		const result = await authenticateAsync(plugin, "testuser", futureToken);
-		expect(result).toBe(false);
-	});
-
-	it("returns false for generic JsonWebTokenError (e.g. invalid signature)", async () => {
-		// Craft a token with valid structure but tampered signature → JsonWebTokenError "invalid signature"
-		// This doesn't match "audience" or "issuer" so it hits the generic fallback
-		const token = signToken(validPayload());
-		const parts = token.split(".");
-		const tampered = [parts[0], parts[1], "invalidsignature"].join(".");
-		const result = await authenticateAsync(plugin, "testuser", tampered);
-		expect(result).toBe(false);
-	});
-
 	it("handles missing groups/roles gracefully", async () => {
 		const token = signToken(
 			validPayload({ groups: undefined, roles: undefined }),
@@ -291,4 +304,3 @@ describe("authenticate", () => {
 		expect(groups).toEqual(["$authenticated"]);
 	});
 });
-

@@ -8,12 +8,17 @@ web:
   favicon: ""
   gravatar: true
 
-# Plugin reads ENTRA_CLIENT_ID and ENTRA_TENANT_ID from environment variables.
+# Plugin reads ENTRA_CLIENT_ID, ENTRA_TENANT_ID, and ENTRA_AUTHORITY from env vars.
 # Values here are fallbacks only (Verdaccio does NOT resolve ${VAR} in plugin config).
+# For sovereign clouds, set ENTRA_AUTHORITY to:
+#   US Government: https://login.microsoftonline.us
+#   China (21Vianet): https://login.partner.microsoftonline.cn
+# @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
 auth:
   entra:
     clientId: "00001111-aaaa-2222-bbbb-3333cccc4444"
     tenantId: "aaaabbbb-0000-cccc-1111-dddd2222eeee"
+    # authority: "https://login.microsoftonline.com"  # default — public cloud
 
 uplinks:
   npmjs:
