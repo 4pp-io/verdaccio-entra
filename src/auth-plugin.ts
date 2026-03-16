@@ -3,7 +3,6 @@ import type { Logger } from "@verdaccio/types";
 import debugCore from "debug";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
-import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 
 import type { EntraConfig, EntraTokenPayload } from "../types/index";
 import { enrichVerifyError } from "./diagnostics";
@@ -11,14 +10,6 @@ import { enrichVerifyError } from "./diagnostics";
 const { Plugin } = pluginUtils;
 
 const debug = debugCore("verdaccio:plugin:entra");
-
-/**
- * Scoped proxy agent for OIDC discovery fetch calls.
- * Reads HTTP_PROXY / HTTPS_PROXY / NO_PROXY from the environment.
- * Scoped to this module — does NOT mutate the global dispatcher.
- * @see https://undici.nodejs.org/#/docs/api/EnvHttpProxyAgent
- */
-const proxyAgent = new EnvHttpProxyAgent();
 
 /** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,12 +61,18 @@ interface OidcDiscovery {
 }
 
 /**
- * Fetch OIDC discovery document using the scoped proxy agent.
+ * Fetch OIDC discovery document.
+ *
+ * Uses native fetch() — proxy support is handled by Node 22.21+'s
+ * built-in NODE_USE_ENV_PROXY=1 which covers both fetch() and https.request().
+ * No custom proxy code needed in the plugin.
+ *
+ * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
 	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
-	const res = await undiciFetch(url, { dispatcher: proxyAgent });
+	const res = await fetch(url);
 	if (!res.ok) {
 		throw new Error(
 			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
@@ -92,20 +89,15 @@ async function discoverOidc(authority: string, tenantId: string): Promise<OidcDi
  * This plugin is strictly an AuthN (authentication/identity) plugin.
  * It does NOT implement authorization hooks (allow_access, allow_publish, etc.)
  * — Verdaccio's core handles authorization natively using the groups returned
- * by `authenticate`. Implementing custom authz hooks would break Verdaccio's
- * built-in user-level and group-level package access controls.
+ * by `authenticate`.
  *
- * ## How it works:
+ * ## Proxy support
+ * Set `NODE_USE_ENV_PROXY=1` to enable proxy support for both OIDC discovery
+ * (fetch) and JWKS key fetching (https.request via jwks-rsa). This is a
+ * Node 22.21+ built-in that covers all HTTP clients without plugin code.
+ * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
+ *
  * @see https://verdaccio.org/docs/plugin-auth — IPluginAuth<T> interface
- *
- * 1. User obtains an Entra access-token client-side (MSAL / WAM broker).
- * 2. `npm login --registry=<url>` sends username + Entra JWT as password.
- * 3. `authenticate(user, password, cb)` validates the JWT via JWKS
- *    and returns `cb(null, groups)` — including `$authenticated` and
- *    any Entra groups/roles from the token claims.
- * 4. **Verdaccio issues its own JWT** and handles all subsequent
- *    authorization (package access, publish, unpublish) using those groups.
- *
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
@@ -116,6 +108,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _audience: string;
 	private _maxTokenBytes: number;
 	private _ready: Promise<void>;
+	private _discoveryFailed = false;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
@@ -129,9 +122,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
 		this._logger = appOptions.logger;
 
-		// OIDC discovery resolves jwks_uri and issuer dynamically.
-		// Retries on failure so transient network issues at startup don't
-		// permanently kill the plugin.
 		this._ready = this._initWithRetry(authority, tenantId);
 
 		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", tenantId, authority, this._audience);
@@ -140,9 +130,10 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	/**
 	 * Authenticate: validate the Entra JWT passed as the password field.
 	 *
-	 * Called by Verdaccio during `npm login`.
-	 * On success, returns groups via `cb(null, groups)`.
-	 * Verdaccio then issues its own JWT and handles all authorization.
+	 * Enforces that the npm login username matches the Entra identity in the
+	 * token (preferred_username / upn / email). This prevents audit log
+	 * spoofing where a valid user could claim a different username in the
+	 * registry's package metadata.
 	 *
 	 * @see https://verdaccio.org/docs/plugin-auth — authenticate callback
 	 */
@@ -154,7 +145,26 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		}
 		this._validateToken(password)
 			.then((payload) => {
-				const upn = payload.preferred_username ?? payload.upn ?? payload.email ?? user;
+				const upn = payload.preferred_username ?? payload.upn ?? payload.email;
+				if (!upn) {
+					this._logger.error({ user }, "Token has no identity claim (preferred_username, upn, email)");
+					cb(null, false);
+					return;
+				}
+
+				// Enforce username matches the Entra identity — prevents audit log spoofing.
+				if (user.toLowerCase() !== upn.toLowerCase()) {
+					this._logger.warn(
+						{ provided: user, actual: upn },
+						"Username mismatch: npm login username '@{provided}' does not match Entra identity '@{actual}'",
+					);
+					cb(errorUtils.getUnauthorized(
+						`Username "${user}" does not match Entra identity "${upn}". ` +
+							"Use your Entra email/UPN as the npm login username.",
+					));
+					return;
+				}
+
 				const groups = this._extractGroups(payload);
 				this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
 				debug("User %s authenticated, groups: %o", upn, groups);
@@ -177,7 +187,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	/**
 	 * Initialize OIDC discovery with retry on failure.
 	 * Retries up to 3 times with exponential backoff (1s, 2s, 4s).
-	 * Logs each failure — never swallows errors silently.
+	 * If all retries fail, sets _discoveryFailed so the next authenticate
+	 * call re-triggers discovery (self-healing).
 	 */
 	private async _initWithRetry(authority: string, tenantId: string, maxRetries = 3): Promise<void> {
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -191,6 +202,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					rateLimit: true, // Prevent kid-spoofing DoS
 					jwksRequestsPerMinute: 10,
 				});
+				this._discoveryFailed = false;
 				this._logger.info(
 					{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
 					"OIDC discovery succeeded — issuer: @{issuer}",
@@ -210,20 +222,24 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				}
 			}
 		}
+		this._discoveryFailed = true;
 		this._logger.error(
 			{ authority, tenantId },
-			"OIDC discovery failed after all retries — plugin will reject all auth attempts. " +
+			"OIDC discovery failed after all retries — will retry on next auth attempt. " +
 				"Check authority (@{authority}) and tenantId (@{tenantId}).",
 		);
 	}
 
 	/**
 	 * Validate an Entra ID JWT: decode → fetch JWKS key → verify signature + claims.
-	 *
-	 * The cryptographic boundary is jwt.verify — ALL claim validation (exp, aud, iss)
-	 * is delegated to the library AFTER signature verification.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
+		// Self-healing: if previous discovery failed, re-trigger
+		if (this._discoveryFailed) {
+			const { authority, tenantId } = this._entraConfig;
+			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId);
+		}
+
 		await this._ready;
 		if (!this._jwks || !this._issuer) {
 			throw new JwksServiceError(

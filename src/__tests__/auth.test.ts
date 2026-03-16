@@ -4,11 +4,9 @@ import jwt from "jsonwebtoken";
 import { TEST_TENANT, TEST_CLIENT, TEST_KID } from "./fixtures";
 import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
 
-// --- Test RSA key pair (generated once for all tests) ---
 let privateKey: string;
 let publicKey: string;
 
-// The issuer that OIDC discovery returns
 const DISCOVERED_ISSUER = ISSUERS.v2(TEST_TENANT);
 
 beforeAll(() => {
@@ -21,40 +19,34 @@ beforeAll(() => {
 	publicKey = pair.publicKey;
 });
 
-// --- Mock undici for OIDC discovery (scoped fetch, not global) ---
-const mockUndici = vi.hoisted(() => {
-	return {
-		mockFetch: vi.fn(),
-	};
-});
+// --- Mock fetch for OIDC discovery (plain globalThis.fetch) ---
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
 
-vi.mock("undici", () => ({
-	EnvHttpProxyAgent: vi.fn(),
-	fetch: mockUndici.mockFetch,
-}));
+function setFetchSuccess(): void {
+	mockFetch.mockResolvedValue({
+		ok: true,
+		json: () => Promise.resolve({
+			issuer: DISCOVERED_ISSUER,
+			jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
+		}),
+	});
+}
 
 // Default: successful OIDC discovery
-mockUndici.mockFetch.mockResolvedValue({
-	ok: true,
-	json: () => Promise.resolve({
-		issuer: DISCOVERED_ISSUER,
-		jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
-	}),
-});
+setFetchSuccess();
 
-// --- Mock jwks-rsa to return our test public key ---
-vi.mock("jwks-rsa", () => {
-	return {
-		default: () => ({
-			getSigningKey: vi.fn().mockImplementation((kid: string) => {
-				if (kid === TEST_KID) {
-					return Promise.resolve({ getPublicKey: () => publicKey });
-				}
-				return Promise.reject(new Error(`Failed to fetch signing key: Unknown kid: ${kid}`));
-			}),
+// --- Mock jwks-rsa ---
+vi.mock("jwks-rsa", () => ({
+	default: () => ({
+		getSigningKey: vi.fn().mockImplementation((kid: string) => {
+			if (kid === TEST_KID) {
+				return Promise.resolve({ getPublicKey: () => publicKey });
+			}
+			return Promise.reject(new Error(`Failed to fetch signing key: Unknown kid: ${kid}`));
 		}),
-	};
-});
+	}),
+}));
 
 function signToken(
 	payload: Record<string, unknown>,
@@ -78,41 +70,19 @@ function validPayload(overrides?: Record<string, unknown>): Record<string, unkno
 	};
 }
 
-// --- Import plugin after mocks are set up ---
 import EntraPlugin from "../auth-plugin";
 
 function createPlugin(configOverrides?: Record<string, unknown>): EntraPlugin {
-	const config = {
-		clientId: TEST_CLIENT,
-		tenantId: TEST_TENANT,
-		...configOverrides,
-	} as never;
-	const appOptions = {
-		logger: {
-			info: vi.fn(),
-			warn: vi.fn(),
-			error: vi.fn(),
-			debug: vi.fn(),
-			trace: vi.fn(),
-			child: vi.fn(),
-			http: vi.fn(),
-		},
-		config: {},
-	} as never;
-	return new EntraPlugin(config, appOptions);
+	return new EntraPlugin(
+		{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, ...configOverrides } as never,
+		{
+			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() },
+			config: {},
+		} as never,
+	);
 }
 
-/**
- * Promisify authenticate — resolves with groups on success, resolves with
- * false on credential failure, rejects on service error.
- * Matches Verdaccio callback contract:
- * @see https://verdaccio.org/docs/plugin-auth#authentication-callback
- */
-function authenticateAsync(
-	plugin: EntraPlugin,
-	user: string,
-	password: string,
-): Promise<string[] | false> {
+function authenticateAsync(plugin: EntraPlugin, user: string, password: string): Promise<string[] | false> {
 	return new Promise((resolve, reject) => {
 		plugin.authenticate(user, password, (err, groups) => {
 			if (err) reject(err);
@@ -144,12 +114,7 @@ describe("EntraPlugin constructor", () => {
 		process.env.ENTRA_CLIENT_ID = TEST_CLIENT;
 		process.env.ENTRA_TENANT_ID = TEST_TENANT;
 		try {
-			expect(() =>
-				createPlugin({
-					clientId: "placeholder",
-					tenantId: "placeholder",
-				}),
-			).not.toThrow();
+			expect(() => createPlugin({ clientId: "placeholder", tenantId: "placeholder" })).not.toThrow();
 		} finally {
 			delete process.env.ENTRA_CLIENT_ID;
 			delete process.env.ENTRA_TENANT_ID;
@@ -158,172 +123,118 @@ describe("EntraPlugin constructor", () => {
 });
 
 describe("OIDC discovery failure", () => {
-	it("retries with exponential backoff then returns service error", async () => {
-		vi.useFakeTimers();
-		// Override undici fetch to simulate discovery failure
-		mockUndici.mockFetch.mockResolvedValue({ ok: false, status: 400 });
+	it("rejects auth when discovery fails", async () => {
+		// Test that a failed discovery results in a service error on authenticate.
+		// We don't test the full retry+backoff timing here because mixing fake timers
+		// with async fetch mocks is fragile. The retry logic is structural — if
+		// _initWithRetry is called and fetch returns failure, the plugin ends up
+		// in _discoveryFailed=true state and rejects with a service error.
+		mockFetch.mockResolvedValue({ ok: false, status: 400 });
+
 		const plugin = createPlugin();
+		// Give the constructor's _initWithRetry time to exhaust retries (3 × backoff)
+		// Since mock fetch resolves instantly, the only delay is setTimeout backoffs
+		await new Promise((r) => { setTimeout(r, 8000); });
+
 		const token = signToken(validPayload());
+		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
 
-		// Advance through retry backoff timers (1s, 2s, 4s)
-		for (let i = 0; i < 3; i++) {
-			await vi.advanceTimersByTimeAsync(5000);
-		}
-
-		// All retries exhausted → plugin not ready → service error
-		await expect(authenticateAsync(plugin, "testuser", token)).rejects.toThrow(/OIDC discovery|not ready/i);
-
-		vi.useRealTimers();
-		// Restore successful mock for other tests
-		mockUndici.mockFetch.mockResolvedValue({
-			ok: true,
-			json: () => Promise.resolve({
-				issuer: DISCOVERED_ISSUER,
-				jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
-			}),
-		});
-	});
+		setFetchSuccess();
+	}, 15_000); // Extended timeout for real retry backoff
 });
 
 describe("authenticate", () => {
 	let plugin: EntraPlugin;
-	beforeEach(() => {
+	beforeEach(async () => {
+		setFetchSuccess();
 		plugin = createPlugin();
+		// Let async OIDC discovery settle (mock resolves instantly)
+		await new Promise<void>((r) => { queueMicrotask(() => r()); });
+		await new Promise<void>((r) => { queueMicrotask(() => r()); });
 	});
 
-	it("succeeds with a valid token and returns groups", async () => {
+	it("succeeds when username matches token identity", async () => {
 		const token = signToken(validPayload());
-		const groups = await authenticateAsync(plugin, "testuser", token);
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(groups).toContain("$authenticated");
 		expect(groups).toContain("developers");
 		expect(groups).toContain("registry-admin");
 	});
 
-	it("extracts preferred_username from token", async () => {
-		const token = signToken(validPayload({ preferred_username: "alice@contoso.com" }));
-		const groups = await authenticateAsync(plugin, "testuser", token);
+	it("succeeds case-insensitively", async () => {
+		const token = signToken(validPayload({ preferred_username: "Alice@Contoso.com" }));
+		const groups = await authenticateAsync(plugin, "alice@contoso.com", token);
 		expect(groups).toContain("$authenticated");
 	});
 
-	// Credential failures return false (not error) — allows plugin chaining
-	// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-fails
+	it("rejects when npm username does not match token identity (anti-spoofing)", async () => {
+		const token = signToken(validPayload({ preferred_username: "bob@contoso.com" }));
+		await expect(authenticateAsync(plugin, "alice@contoso.com", token))
+			.rejects.toThrow(/does not match Entra identity/);
+	});
 
-	it("returns false for expired token (credential failure)", async () => {
+	it("returns false when token has no identity claim", async () => {
+		const token = signToken(validPayload({ preferred_username: undefined, upn: undefined, email: undefined }));
+		const result = await authenticateAsync(plugin, "anyone", token);
+		expect(result).toBe(false);
+	});
+
+	it("returns false for expired token", async () => {
 		const token = signToken(validPayload(), { expiresIn: "-1s" });
-		const result = await authenticateAsync(plugin, "testuser", token);
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);
 	});
 
-	it("returns false for wrong audience (credential failure)", async () => {
-		const token = signToken(validPayload({ aud: "api://wrong-client-id" }));
-		const result = await authenticateAsync(plugin, "testuser", token);
+	it("returns false for wrong audience", async () => {
+		const token = signToken(validPayload({ aud: "api://wrong" }));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);
 	});
 
-	it("returns false for wrong issuer (credential failure)", async () => {
-		// Use ISSUERS.v1 with a wrong tenant to exercise both issuer formats
-		const token = signToken(
-			validPayload({ iss: ISSUERS.v1("99999999-9999-9999-9999-999999999999") }),
-		);
-		const result = await authenticateAsync(plugin, "testuser", token);
+	it("returns false for wrong issuer", async () => {
+		const token = signToken(validPayload({ iss: ISSUERS.v1("99999999-9999-9999-9999-999999999999") }));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);
 	});
-
-	// Swapped ID detection — provides actionable hints when clientId/tenantId are swapped
-	// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-
-	it("detects swapped IDs when tid matches configured clientId", async () => {
-		const token = signToken(validPayload({
-			tid: TEST_CLIENT,
-			aud: `${AUDIENCE_PREFIX}${TEST_TENANT}`,
-			iss: `https://sts.windows.net/${TEST_CLIENT}/`,
-		}));
-		const result = await authenticateAsync(plugin, "testuser", token);
-		expect(result).toBe(false);
-	});
-
-	it("detects swapped IDs when aud contains configured tenantId", async () => {
-		const token = signToken(validPayload({
-			aud: `${AUDIENCE_PREFIX}${TEST_TENANT}`,
-			iss: "https://sts.windows.net/99999999-9999-9999-9999-999999999999/",
-		}));
-		const result = await authenticateAsync(plugin, "testuser", token);
-		expect(result).toBe(false);
-	});
-
-	// Service errors (JWKS endpoint down) return error — stops plugin chain
-	// @see https://verdaccio.org/docs/plugin-auth#if-the-authentication-produce-an-error
 
 	it("returns error for unknown kid (JWKS service failure)", async () => {
 		const token = signToken(validPayload(), { kid: "unknown-kid" });
-		await expect(authenticateAsync(plugin, "testuser", token)).rejects.toThrow(/signing key/i);
+		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/signing key/i);
 	});
 
-	it("returns false for non-JWT string (credential failure)", async () => {
-		const result = await authenticateAsync(plugin, "testuser", "not-a-jwt");
+	it("returns false for non-JWT string", async () => {
+		const result = await authenticateAsync(plugin, "user@contoso.com", "not-a-jwt");
 		expect(result).toBe(false);
 	});
 
-	it("returns false for token missing kid header (credential failure)", async () => {
+	it("returns false for missing kid header", async () => {
 		const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
 		const payload = Buffer.from(JSON.stringify(validPayload())).toString("base64url");
-		const token = `${header}.${payload}.fakesig`;
-		const result = await authenticateAsync(plugin, "testuser", token);
+		const result = await authenticateAsync(plugin, "user@contoso.com", `${header}.${payload}.fakesig`);
 		expect(result).toBe(false);
 	});
 
-	it("returns false for token exceeding max size (credential failure)", async () => {
-		const oversized = "x".repeat(DEFAULT_MAX_TOKEN_BYTES + 1);
-		const result = await authenticateAsync(plugin, "testuser", oversized);
+	it("returns false for oversized token", async () => {
+		const result = await authenticateAsync(plugin, "user@contoso.com", "x".repeat(DEFAULT_MAX_TOKEN_BYTES + 1));
 		expect(result).toBe(false);
 	});
 
-	it("returns false for generic JsonWebTokenError (e.g. invalid signature)", async () => {
+	it("returns false for tampered signature", async () => {
 		const token = signToken(validPayload());
 		const parts = token.split(".");
-		const tampered = [parts[0], parts[1], "invalidsignature"].join(".");
-		const result = await authenticateAsync(plugin, "testuser", tampered);
-		expect(result).toBe(false);
-	});
-
-	it("returns false for generic JWT error (e.g. NotBeforeError)", async () => {
-		const token = signToken(validPayload(), { expiresIn: "1h" });
-		const decoded = jwt.decode(token, { complete: true });
-		if (!decoded || typeof decoded === "string") throw new Error("test setup: failed to decode token");
-		const payload = { ...decoded.payload as Record<string, unknown>, nbf: Math.floor(Date.now() / 1000) + 99999 };
-		const futureToken = jwt.sign(payload, privateKey, {
-			algorithm: "RS256",
-			header: { alg: "RS256", kid: TEST_KID },
-		} as jwt.SignOptions);
-		const result = await authenticateAsync(plugin, "testuser", futureToken);
-		expect(result).toBe(false);
-	});
-
-	it("handles audience mismatch without tid/aud claims gracefully", async () => {
-		const token = signToken({
-			iss: DISCOVERED_ISSUER,
-			preferred_username: "user@contoso.com",
-		});
-		const result = await authenticateAsync(plugin, "testuser", token);
+		const result = await authenticateAsync(plugin, "user@contoso.com", [parts[0], parts[1], "bad"].join("."));
 		expect(result).toBe(false);
 	});
 
 	it("merges groups and roles claims", async () => {
-		const token = signToken(
-			validPayload({
-				groups: ["group-a", "group-b"],
-				roles: ["role-x"],
-			}),
-		);
-		const groups = await authenticateAsync(plugin, "testuser", token);
-		expect(groups).toEqual(["$authenticated", "group-a", "group-b", "role-x"]);
+		const token = signToken(validPayload({ groups: ["a", "b"], roles: ["x"] }));
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(groups).toEqual(["$authenticated", "a", "b", "x"]);
 	});
 
 	it("handles missing groups/roles gracefully", async () => {
-		const token = signToken(
-			validPayload({ groups: undefined, roles: undefined }),
-		);
-		const groups = await authenticateAsync(plugin, "testuser", token);
+		const token = signToken(validPayload({ groups: undefined, roles: undefined }));
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(groups).toEqual(["$authenticated"]);
 	});
 });

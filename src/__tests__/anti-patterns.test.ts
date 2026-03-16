@@ -59,18 +59,15 @@ describe("process isolation", () => {
 	});
 });
 
-// === Principle: Network calls must be proxy-aware ===
+// === Principle: Proxy support via NODE_USE_ENV_PROXY, not custom code ===
 
 describe("proxy safety", () => {
-	it("no bare global fetch() — must use proxy-aware fetcher", () => {
-		const allowed = ["typeof fetch", "fetcher = fetch", "as undiciFetch", "fetch as"];
-		const pattern = /(?<!\w)fetch\s*\(/g;
-
+	it("no undici imports — proxy is handled by NODE_USE_ENV_PROXY=1", () => {
+		// Node 22.21+ has built-in proxy support for both fetch() and https.request().
+		// No custom proxy agents, dispatchers, or undici imports needed.
 		forEachSourceLine((file, line, num) => {
-			if (!pattern.test(line)) return;
-			pattern.lastIndex = 0;
-			if (!allowed.some((a) => line.includes(a))) {
-				fail(file, num, "no bare fetch — use undici with proxy dispatcher", line.trim());
+			if (/from\s+["']undici["']|require\s*\(\s*["']undici["']\s*\)/.test(line)) {
+				fail(file, num, "no undici — use NODE_USE_ENV_PROXY=1 for proxy support", line.trim());
 			}
 		});
 	});
@@ -79,6 +76,20 @@ describe("proxy safety", () => {
 // === Principle: Respect framework boundaries ===
 
 describe("framework compliance", () => {
+	it("authenticate enforces username matches token identity — no spoofing", () => {
+		// The `user` arg from npm login is attacker-controlled. The plugin must
+		// verify it matches the Entra identity before passing it to Verdaccio,
+		// otherwise package metadata can be spoofed.
+		const content = fs.readFileSync(path.join(srcDir, "auth-plugin.ts"), "utf-8");
+		const hasUsernameCheck = /user\.toLowerCase\(\)\s*!==\s*upn\.toLowerCase\(\)/.test(content);
+		if (!hasUsernameCheck) {
+			throw new Error(
+				"auth-plugin.ts does not enforce username === token identity. " +
+					"npm login allows arbitrary usernames — the plugin must verify the match.",
+			);
+		}
+	});
+
 	it("no authorization hooks — the host framework handles authz from authenticate() groups", () => {
 		const banned = ["allow_access", "allow_publish", "allow_unpublish", "adduser"];
 		forEachSourceLine((file, line, num) => {
