@@ -1,121 +1,140 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execSync } from "node:child_process";
-import path from "node:path";
-import { TEST_TENANT, TEST_CLIENT, MICROSOFT_TENANT } from "./fixtures";
+import { describe, it, expect, vi } from "vitest";
+import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
+import { ISSUERS } from "../auth-plugin";
+import { runChecks, countFailures, expectedAudience } from "../check-config";
+import type { CheckConfigInput } from "../check-config";
 
-const scriptPath = path.resolve(__dirname, "../../scripts/check-config.ts").replace(/\\/g, "/");
-
-function run(args: string[] = [], env: Record<string, string> = {}): { stdout: string; exitCode: number } {
-	const cmd = `tsx "${scriptPath}" ${args.join(" ")}`;
-	try {
-		const stdout = execSync(cmd, {
-			env: { ...process.env, ...env },
-			timeout: 30_000,
-			shell: "bash",
-		}).toString("utf-8");
-		return { stdout: String(stdout), exitCode: 0 };
-	} catch (err) {
-		const e = err as { stdout?: Buffer | string; stderr?: Buffer | string; status?: number };
-		return { stdout: String(e.stdout ?? "") + String(e.stderr ?? ""), exitCode: e.status ?? 1 };
-	}
+/** Mock fetcher that simulates successful OIDC/JWKS responses */
+function mockFetcher(issuer: string): typeof fetch {
+	return vi.fn().mockImplementation((url: string) => {
+		if (url.includes("openid-configuration")) {
+			return Promise.resolve({
+				ok: true,
+				json: () => Promise.resolve({ issuer }),
+			});
+		}
+		if (url.includes("discovery/v2.0/keys")) {
+			return Promise.resolve({
+				ok: true,
+				json: () => Promise.resolve({ keys: [{ kid: "test" }] }),
+			});
+		}
+		return Promise.resolve({ ok: false, status: 404 });
+	}) as unknown as typeof fetch;
 }
 
-describe("check-config script", () => {
-	const savedClientId = process.env["ENTRA_CLIENT_ID"];
-	const savedTenantId = process.env["ENTRA_TENANT_ID"];
+/** Mock fetcher that simulates network failures */
+function failingFetcher(): typeof fetch {
+	return vi.fn().mockImplementation(() => {
+		return Promise.resolve({ ok: false, status: 400 });
+	}) as unknown as typeof fetch;
+}
 
-	beforeEach(() => {
-		delete process.env["ENTRA_CLIENT_ID"];
-		delete process.env["ENTRA_TENANT_ID"];
+function input(overrides?: Partial<CheckConfigInput>): CheckConfigInput {
+	return {
+		clientId: TEST_CLIENT,
+		tenantId: TEST_TENANT,
+		fetcher: mockFetcher(ISSUERS.v2(TEST_TENANT)),
+		...overrides,
+	};
+}
+
+describe("runChecks", () => {
+	it("passes all checks with valid config", async () => {
+		const results = await runChecks(input());
+		const failures = countFailures(results);
+		expect(failures).toBe(0);
+		expect(results.some((r) => r.label === "Client ID is set" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "Tenant ID is set" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "Client ID is a valid GUID" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "Tenant ID is a valid GUID" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "JWKS endpoint is reachable" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "Issuer matches tenant ID" && r.ok)).toBe(true);
 	});
 
-	afterEach(() => {
-		if (savedClientId) process.env["ENTRA_CLIENT_ID"] = savedClientId;
-		if (savedTenantId) process.env["ENTRA_TENANT_ID"] = savedTenantId;
+	it("fails when client ID is empty", async () => {
+		const results = await runChecks(input({ clientId: "" }));
+		expect(results.some((r) => r.label === "Client ID is set" && !r.ok)).toBe(true);
 	});
 
-	it("--help exits 0 and shows usage", () => {
-		const { stdout, exitCode } = run(["--help"]);
-		expect(exitCode).toBe(0);
-		expect(stdout).toContain("--client-id");
-		expect(stdout).toContain("--tenant-id");
-		expect(stdout).toContain("ENTRA_CLIENT_ID");
+	it("fails when tenant ID is empty", async () => {
+		const results = await runChecks(input({ tenantId: "" }));
+		expect(results.some((r) => r.label === "Tenant ID is set" && !r.ok)).toBe(true);
 	});
 
-	it("fails when no IDs provided", () => {
-		const { stdout, exitCode } = run([], { ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "" });
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("[FAIL] Client ID is set");
-		expect(stdout).toContain("[FAIL] Tenant ID is set");
+	it("fails on non-GUID client ID", async () => {
+		const results = await runChecks(input({ clientId: "not-a-guid" }));
+		const fail = results.find((r) => r.label === "Client ID is a valid GUID");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("not-a-guid");
 	});
 
-	it("fails on non-GUID client ID", () => {
-		const { stdout, exitCode } = run(["--client-id", "not-a-guid", "--tenant-id", TEST_TENANT]);
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("[FAIL] Client ID is a valid GUID");
-		expect(stdout).toContain("not-a-guid");
+	it("fails on non-GUID tenant ID", async () => {
+		const results = await runChecks(input({ tenantId: "bad" }));
+		const fail = results.find((r) => r.label === "Tenant ID is a valid GUID");
+		expect(fail?.ok).toBe(false);
 	});
 
-	it("fails on non-GUID tenant ID", () => {
-		const { stdout, exitCode } = run(["--client-id", TEST_CLIENT, "--tenant-id", "bad"]);
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("[FAIL] Tenant ID is a valid GUID");
+	it("detects identical client and tenant IDs", async () => {
+		const results = await runChecks(input({ clientId: TEST_TENANT, tenantId: TEST_TENANT }));
+		const fail = results.find((r) => r.label === "Client ID and Tenant ID are different");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("pasted the same GUID twice");
 	});
 
-	it("detects identical client and tenant IDs", () => {
-		const { stdout, exitCode } = run(["--client-id", TEST_TENANT, "--tenant-id", TEST_TENANT]);
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("[FAIL] Client ID and Tenant ID are different");
-		expect(stdout).toContain("pasted the same GUID twice");
+	it("skips identity check when IDs are not GUIDs", async () => {
+		const results = await runChecks(input({ clientId: "bad", tenantId: "bad" }));
+		expect(results.find((r) => r.label === "Client ID and Tenant ID are different")).toBeUndefined();
 	});
 
-	it("reads from env vars as fallback", () => {
-		const { stdout, exitCode } = run([], {
-			ENTRA_CLIENT_ID: "not-guid",
-			ENTRA_TENANT_ID: "also-not-guid",
-		});
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("ENTRA_CLIENT_ID env");
-		expect(stdout).toContain("ENTRA_TENANT_ID env");
+	it("detects JWKS endpoint failure", async () => {
+		const results = await runChecks(input({ fetcher: failingFetcher() }));
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("tenant ID is wrong");
 	});
 
-	it("flags override env vars", () => {
-		const { stdout } = run(
-			["--client-id", "not-a-guid"],
-			{ ENTRA_CLIENT_ID: TEST_CLIENT },
-		);
-		expect(stdout).toContain("--client-id flag");
-		expect(stdout).toContain("not-a-guid");
+	it("detects OIDC discovery failure", async () => {
+		const results = await runChecks(input({ fetcher: failingFetcher() }));
+		const fail = results.find((r) => r.label === "OpenID Connect discovery is reachable");
+		expect(fail?.ok).toBe(false);
 	});
 
-	it("--quiet suppresses passing checks", () => {
-		const { stdout, exitCode } = run(["--quiet", "--client-id", TEST_TENANT, "--tenant-id", TEST_TENANT]);
-		expect(exitCode).toBe(1);
-		expect(stdout).not.toContain("[PASS]");
-		expect(stdout).toContain("[FAIL]");
+	it("detects issuer mismatch", async () => {
+		const results = await runChecks(input({
+			fetcher: mockFetcher("https://wrong-issuer.example.com/v2.0"),
+		}));
+		const fail = results.find((r) => r.label === "Issuer matches tenant ID");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("wrong-issuer");
 	});
 
-	// --- Network tests: require ENTRA_TEST_TENANT_ID env var ---
-
-	it("validates JWKS endpoint with Microsoft's public tenant", () => {
-		const { stdout, exitCode } = run([
-			"--client-id", TEST_CLIENT,
-			"--tenant-id", MICROSOFT_TENANT,
-		]);
-		expect(exitCode).toBe(0);
-		expect(stdout).toContain("[PASS] JWKS endpoint is reachable");
-		expect(stdout).toContain("[PASS] JWKS endpoint returns signing keys");
-		expect(stdout).toContain("[PASS] Issuer matches tenant ID");
-		expect(stdout).toContain("All checks passed");
+	it("handles network error gracefully", async () => {
+		const results = await runChecks(input({
+			fetcher: vi.fn().mockRejectedValue(new Error("ENOTFOUND")) as unknown as typeof fetch,
+		}));
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("ENOTFOUND");
 	});
 
-	it("detects invalid tenant via JWKS endpoint failure", () => {
-		const { stdout, exitCode } = run([
-			"--client-id", TEST_CLIENT,
-			"--tenant-id", "99999999-9999-9999-9999-999999999999",
-		]);
-		expect(exitCode).toBe(1);
-		expect(stdout).toContain("[FAIL] JWKS endpoint is reachable");
-		expect(stdout).toContain("tenant ID is wrong");
+	it("skips network checks when tenant is not a valid GUID", async () => {
+		const results = await runChecks(input({ tenantId: "not-guid" }));
+		expect(results.find((r) => r.label === "JWKS endpoint is reachable")).toBeUndefined();
+		expect(results.find((r) => r.label === "OpenID Connect discovery is reachable")).toBeUndefined();
+	});
+});
+
+describe("helpers", () => {
+	it("expectedAudience returns api:// prefixed client ID", () => {
+		expect(expectedAudience(TEST_CLIENT)).toBe(`api://${TEST_CLIENT}`);
+	});
+
+	it("countFailures counts only failed results", () => {
+		expect(countFailures([
+			{ label: "a", ok: true, detail: "" },
+			{ label: "b", ok: false, detail: "fail" },
+			{ label: "c", ok: false, detail: "fail" },
+		])).toBe(2);
 	});
 });
