@@ -8,10 +8,9 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
-  contents: write
-  pull-requests: write
-  packages: write
-  id-token: write
+  contents: write      # push tags, create GH releases
+  pull-requests: write # create/update "Version Packages" PR
+  id-token: write      # npm provenance via OIDC
 
 jobs:
   release:
@@ -38,3 +37,4 @@ jobs:
           publish: npm run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
