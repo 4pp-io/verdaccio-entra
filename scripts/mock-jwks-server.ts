@@ -8,7 +8,6 @@
  */
 
 import { createServer } from "node:http";
-import { writeFileSync, mkdirSync } from "node:fs";
 import { generateKeyPair, exportJWK } from "jose";
 
 const PORT = 9877;

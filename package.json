@@ -10,6 +10,7 @@
   "files": [
     "lib/",
     "!lib/src/__tests__/",
+    "!lib/scripts/",
     "README.md",
     "LICENSE"
   ],
