@@ -80,7 +80,7 @@ jobs:
         run: git reset --hard HEAD~1
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
         with:
           node-version: 22
           cache: npm
@@ -112,7 +112,7 @@ jobs:
       - name: Post comment with published version
         run: |
           cat <<BODY > /tmp/comment-body.md
-          Published snapshot `${SNAPSHOT_TAG}` in response to [this comment](${COMMENT_URL}). Install with `npm i @4pp-io/verdaccio-entra@${PUBLISH_TAG}`
+          Published snapshot $SNAPSHOT_TAG in response to [this comment]($COMMENT_URL). Install with \`npm i @4pp-io/verdaccio-entra@$PUBLISH_TAG\`
           BODY
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
         env:
