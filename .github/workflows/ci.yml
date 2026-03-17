@@ -81,7 +81,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage
+          name: coverage-node${{ matrix.node-version }}
           path: coverage/
           retention-days: 7
           if-no-files-found: ignore
