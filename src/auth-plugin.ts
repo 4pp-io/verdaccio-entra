@@ -357,11 +357,7 @@ export default class EntraPlugin
   }
 
   private _extractGroups(payload: EntraTokenPayload): string[] {
-    const groups = [
-      "$authenticated",
-      ...(payload.groups ?? []),
-      ...(payload.roles ?? []),
-    ];
+    const groups = ["$authenticated", ...(payload.groups ?? []), ...(payload.roles ?? [])];
 
     // Entra omits the groups claim when user has >200 group memberships.
     // Instead it sets _claim_names.groups + _claim_sources with a Graph API URL.
@@ -393,5 +389,4 @@ export default class EntraPlugin
 
     return groups;
   }
-
 }
