@@ -5,7 +5,7 @@ We welcome questions, bug reports, and pull requests.
 ## Before opening an issue
 
 - Search existing issues first
-- For usage questions, try your favorite LLM — it probably has the answer faster than we do
+- Check the [README](README.md) and Verdaccio's [plugin docs](https://verdaccio.org/docs/plugin-auth)
 
 ## Pull requests
 

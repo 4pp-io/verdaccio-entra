@@ -146,9 +146,15 @@ export function warnIfProxyMisconfigured(
 	const hasProxy = env["HTTPS_PROXY"] || env["HTTP_PROXY"] || env["https_proxy"] || env["http_proxy"];
 	const hasFlag = env["NODE_USE_ENV_PROXY"];
 	if (hasProxy && !hasFlag) {
+		const vars = [
+			env["HTTPS_PROXY"] && "HTTPS_PROXY",
+			env["HTTP_PROXY"] && "HTTP_PROXY",
+			env["https_proxy"] && "https_proxy",
+			env["http_proxy"] && "http_proxy",
+		].filter(Boolean).join(", ");
 		logger.warn(
-			{ proxy: hasProxy, fix: "set NODE_USE_ENV_PROXY=1" },
-			"entra: proxy env vars detected but Node will ignore them without NODE_USE_ENV_PROXY=1",
+			{ vars, fix: "set NODE_USE_ENV_PROXY=1" },
+			"entra: proxy env vars (@{vars}) detected but Node will ignore them without NODE_USE_ENV_PROXY=1",
 		);
 	}
 }
@@ -188,12 +194,12 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const envFailClosed = process.env["ENTRA_FAIL_CLOSED"];
 			const failClosed = envFailClosed !== undefined ? envFailClosed === "true" : (config.failClosed ?? false);
 
-			// ADVERSARIAL ORACLE NOTE:
-			// Verdaccio's plugin-async-loader.js blindly catches ALL constructor exceptions
-			// (Error, TypeError, strings, etc.) using a generic catch block, logs a warning,
-			// and cheerfully boots up the registry without this plugin. This is a massive "fail open"
-			// security risk. Using process.exit(1) here is self-defense against a framework that
-			// actively sabotages the security perimeter.
+			// Verdaccio's plugin-async-loader.js catches all constructor exceptions
+			// and continues booting without the plugin. This means a config error
+			// silently disables Entra auth, falling back to htpasswd or no auth.
+			// process.exit(1) is the only way to enforce "fail closed" behavior
+			// given the framework's error handling.
+			// @see https://github.com/verdaccio/verdaccio/blob/master/packages/loaders/src/plugin-async-loader.ts
 			if (failClosed) {
 				this._logger.error(
 					{ err: msg, failClosed: true },
