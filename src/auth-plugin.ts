@@ -13,44 +13,14 @@ const { Plugin } = pluginUtils;
 
 const debug = debugCore("verdaccio:plugin:entra");
 
-/** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/**
- * Default max token size: 256,000 bytes (decimal), matching the
- * Microsoft.IdentityModel default `TokenValidationParameters.DefaultMaximumTokenSizeInBytes`.
- * Note: this is 256,000 bytes, not 256 KiB (262,144).
- * @see https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultmaximumtokensizeinbytes
- */
+/** 256,000 bytes — matches Microsoft.IdentityModel's DefaultMaximumTokenSizeInBytes (decimal, not KiB). */
 export const DEFAULT_MAX_TOKEN_BYTES = 256_000;
 export const AUDIENCE_PREFIX = "api://";
-
-/**
- * Clock skew tolerance for JWT verification (seconds).
- * Accommodates minor clock drift between token issuer and this server.
- * @see https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4
- */
 const DEFAULT_CLOCK_TOLERANCE_SECONDS = 300;
-
-/**
- * Default Azure Public cloud authority.
- * Override with `authority` config for sovereign clouds.
- * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
- */
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
 
-/**
- * Entra v2 issuer and JWKS URI patterns.
- *
- * For a given tenantId and authority, these are 100% deterministic —
- * the plugin computes them directly instead of fetching the OIDC
- * discovery document at runtime. jose's createRemoteJWKSet handles
- * all JWKS key fetching, caching, rotation, and retries.
- *
- * check-config.ts verifies the deterministic JWKS endpoint is reachable
- * as a pre-flight validation step.
- *
- * @see https://learn.microsoft.com/entra/identity-platform/v2-protocols-oidc
- */
+/** Deterministic Entra v2 issuer URI — no runtime OIDC discovery needed. */
 export const ISSUERS = {
   v2: (tenantId: string, authority = DEFAULT_AUTHORITY): string => `${authority}/${tenantId}/v2.0`,
 } as const;
@@ -389,8 +359,8 @@ export default class EntraPlugin
   private _extractGroups(payload: EntraTokenPayload): string[] {
     const groups = [
       "$authenticated",
-      ...this._extractStringArray(payload.groups),
-      ...this._extractStringArray(payload.roles),
+      ...(payload.groups ?? []),
+      ...(payload.roles ?? []),
     ];
 
     // Entra omits the groups claim when user has >200 group memberships.
@@ -424,8 +394,4 @@ export default class EntraPlugin
     return groups;
   }
 
-  private _extractStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return value.filter((item): item is string => typeof item === "string");
-  }
 }

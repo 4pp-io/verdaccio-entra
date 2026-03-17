@@ -363,7 +363,8 @@ describe("authenticate", () => {
     expect(result).toBe(false);
   });
 
-  // --- Token rejection (verifies jose config + plugin pre-checks) ---
+  // Contract tests: verify jose is configured correctly (algorithms, issuer, audience)
+  // and plugin pre-checks (size guard) work end-to-end. Not testing jose itself.
   it.each([
     { desc: "expired token", token: () => signToken(entraV2Claims(), { expiresIn: "-6m" }) },
     {
@@ -493,7 +494,8 @@ describe("authenticate", () => {
     expect(result).toBe(false);
   });
 
-  // --- Shape guard: valibot schema rejects claims that violate Entra contract ---
+  // Contract tests: verify valibot schema catches claim types that violate
+  // Microsoft's documented Entra token shape. Catches config drift, not valibot bugs.
   // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
   it.each([
     { desc: "preferred_username is number", overrides: { preferred_username: 12345 } },
