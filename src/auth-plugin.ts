@@ -147,42 +147,41 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			cb(null, false);
 			return;
 		}
-		this._validateToken(password)
-			.then((payload) => {
-				const upn = payload.preferred_username ?? payload.upn ?? payload.email;
-				if (!upn) {
-					this._logger.error({ user }, "Token has no identity claim (preferred_username, upn, email)");
-					cb(null, false);
-					return;
-				}
+		(async () => {
+			const payload = await this._validateToken(password);
+			const upn = payload.preferred_username ?? payload.upn ?? payload.email;
+			if (!upn) {
+				this._logger.error({ user }, "Token has no identity claim (preferred_username, upn, email)");
+				cb(null, false);
+				return;
+			}
 
-				if (user.toLowerCase() !== upn.toLowerCase()) {
-					this._logger.warn(
-						{ provided: user, actual: upn },
-						"Username mismatch: npm login username '@{provided}' does not match Entra identity '@{actual}'",
-					);
-					cb(errorUtils.getUnauthorized(
-						`Username "${user}" does not match Entra identity "${upn}". ` +
-							"Use your Entra email/UPN as the npm login username.",
-					));
-					return;
-				}
+			if (user.toLowerCase() !== upn.toLowerCase()) {
+				this._logger.warn(
+					{ provided: user, actual: upn },
+					"Username mismatch: npm login username '@{provided}' does not match Entra identity '@{actual}'",
+				);
+				cb(errorUtils.getUnauthorized(
+					`Username "${user}" does not match Entra identity "${upn}". ` +
+						"Use your Entra email/UPN as the npm login username.",
+				));
+				return;
+			}
 
-				const groups = this._extractGroups(payload);
-				this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
-				debug("User %s authenticated, groups: %o", upn, groups);
-				cb(null, groups);
-			})
-			.catch((err) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
-				debug("Authentication failed for %s: %s", user, msg);
-				if (this._isServiceError(err)) {
-					cb(errorUtils.getInternalError(msg));
-				} else {
-					cb(null, false);
-				}
-			});
+			const groups = this._extractGroups(payload);
+			this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
+			debug("User %s authenticated, groups: %o", upn, groups);
+			cb(null, groups);
+		})().catch((err) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
+			debug("Authentication failed for %s: %s", user, msg);
+			if (this._isServiceError(err)) {
+				cb(errorUtils.getInternalError(msg));
+			} else {
+				cb(null, false);
+			}
+		});
 	}
 
 	// --- Internals ---
