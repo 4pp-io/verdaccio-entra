@@ -118,9 +118,14 @@ export function resolveConfig(
   const authority = env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
   const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
   const failClosed = envBool(env["ENTRA_FAIL_CLOSED"]) ?? config.failClosed ?? false;
-  const allowGroupOverage = envBool(env["ENTRA_ALLOW_GROUP_OVERAGE"]) ?? config.allowGroupOverage ?? false;
-  const maxTokenBytes = envInt(env["ENTRA_MAX_TOKEN_BYTES"]) ?? config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
-  const clockToleranceSeconds = envInt(env["ENTRA_CLOCK_TOLERANCE_SECONDS"]) ?? config.clockToleranceSeconds ?? DEFAULT_CLOCK_TOLERANCE_SECONDS;
+  const allowGroupOverage =
+    envBool(env["ENTRA_ALLOW_GROUP_OVERAGE"]) ?? config.allowGroupOverage ?? false;
+  const maxTokenBytes =
+    envInt(env["ENTRA_MAX_TOKEN_BYTES"]) ?? config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+  const clockToleranceSeconds =
+    envInt(env["ENTRA_CLOCK_TOLERANCE_SECONDS"]) ??
+    config.clockToleranceSeconds ??
+    DEFAULT_CLOCK_TOLERANCE_SECONDS;
 
   if (logger) {
     const overrides = [
@@ -143,7 +148,16 @@ export function resolveConfig(
 
   assertGuid(clientId, "clientId");
   assertGuid(tenantId, "tenantId");
-  return { clientId, tenantId, authority, audience, failClosed, allowGroupOverage, maxTokenBytes, clockToleranceSeconds };
+  return {
+    clientId,
+    tenantId,
+    authority,
+    audience,
+    failClosed,
+    allowGroupOverage,
+    maxTokenBytes,
+    clockToleranceSeconds,
+  };
 }
 
 /** Parse an env var as a boolean ("true"/"false"), or undefined if not set. */
