@@ -46,6 +46,8 @@ export interface EntraConfig {
 
 /** Claims used by the plugin from a validated Entra ID access token. */
 export interface EntraTokenPayload {
+	oid?: string;
+	sub?: string;
 	preferred_username?: string;
 	upn?: string;
 	email?: string;

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
 import { TEST_TENANT, TEST_CLIENT, TEST_KID } from "./fixtures";
-import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS } from "../auth-plugin";
+import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS, resolveConfig } from "../auth-plugin";
 
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
@@ -120,6 +120,58 @@ describe("EntraPlugin constructor", () => {
 	});
 });
 
+describe("resolveConfig", () => {
+	it("returns config values when no env vars are set", () => {
+		const result = resolveConfig(
+			{ clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+			{},
+		);
+		expect(result.clientId).toBe(TEST_CLIENT);
+		expect(result.tenantId).toBe(TEST_TENANT);
+		expect(result.authority).toBe("https://login.microsoftonline.com");
+		expect(result.audience).toBe(`${AUDIENCE_PREFIX}${TEST_CLIENT}`);
+	});
+
+	it("env vars take precedence over config values", () => {
+		const result = resolveConfig(
+			{ clientId: "00000000-0000-0000-0000-000000000000", tenantId: "00000000-0000-0000-0000-000000000000" },
+			{ ENTRA_CLIENT_ID: TEST_CLIENT, ENTRA_TENANT_ID: TEST_TENANT },
+		);
+		expect(result.clientId).toBe(TEST_CLIENT);
+		expect(result.tenantId).toBe(TEST_TENANT);
+	});
+
+	it("env audience overrides config and default", () => {
+		const result = resolveConfig(
+			{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, audience: "api://from-config" },
+			{ ENTRA_AUDIENCE: "api://from-env" },
+		);
+		expect(result.audience).toBe("api://from-env");
+	});
+
+	it("env authority overrides config", () => {
+		const result = resolveConfig(
+			{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, authority: "https://from-config" },
+			{ ENTRA_AUTHORITY: "https://login.microsoftonline.us" },
+		);
+		expect(result.authority).toBe("https://login.microsoftonline.us");
+	});
+
+	it("throws on invalid clientId from env", () => {
+		expect(() => resolveConfig(
+			{ clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+			{ ENTRA_CLIENT_ID: "not-a-guid" },
+		)).toThrow(/Invalid clientId/);
+	});
+
+	it("is testable without mutating process.env", () => {
+		// The whole point: env dict is injectable
+		const env = { ENTRA_CLIENT_ID: TEST_CLIENT, ENTRA_TENANT_ID: TEST_TENANT };
+		const result = resolveConfig({ clientId: "", tenantId: "" }, env);
+		expect(result.clientId).toBe(TEST_CLIENT);
+	});
+});
+
 describe("OIDC discovery failure", () => {
 	it("rejects auth when discovery fails", async () => {
 		mockFetch.mockResolvedValue({ ok: false, status: 400 });
@@ -130,6 +182,68 @@ describe("OIDC discovery failure", () => {
 		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
 
 		setFetchSuccess();
+	});
+
+	it("concurrent auth requests share a single retry (no thundering herd)", async () => {
+		mockFetch.mockResolvedValue({ ok: false, status: 503 });
+		const plugin = createPlugin({ discoveryRetries: 1 });
+		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+
+		// Discovery has failed; now restore fetch and fire concurrent requests
+		let fetchCount = 0;
+		mockFetch.mockImplementation((input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("openid-configuration")) {
+				fetchCount++;
+				return Promise.resolve({
+					ok: true,
+					json: () => Promise.resolve({ issuer: DISCOVERED_ISSUER, jwks_uri: DISCOVERED_JWKS_URI }),
+				});
+			}
+			if (url.includes("discovery/v2.0/keys")) {
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve({ keys: [publicJwk] }),
+					headers: new Headers({ "content-type": "application/json" }),
+				});
+			}
+			return Promise.resolve({ ok: false, status: 404 });
+		});
+
+		const token = await signToken(validClaims());
+		// Fire 5 concurrent auth calls — should only trigger one discovery fetch
+		await Promise.allSettled([
+			authenticateAsync(plugin, "user@contoso.com", token),
+			authenticateAsync(plugin, "user@contoso.com", token),
+			authenticateAsync(plugin, "user@contoso.com", token),
+			authenticateAsync(plugin, "user@contoso.com", token),
+			authenticateAsync(plugin, "user@contoso.com", token),
+		]);
+
+		expect(fetchCount).toBe(1);
+		setFetchSuccess();
+	});
+
+	it("recovers after discovery failure — success resets state", async () => {
+		mockFetch.mockResolvedValue({ ok: false, status: 503 });
+		const plugin = createPlugin({ discoveryRetries: 1 });
+		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+
+		// First auth fails (discovery still down)
+		const token = await signToken(validClaims());
+		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
+
+		// Now restore the endpoint
+		setFetchSuccess();
+
+		// Next auth attempt should trigger recovery and succeed
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(groups).toContain("$authenticated");
+
+		// And subsequent calls should not re-trigger discovery
+		const groups2 = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(groups2).toContain("$authenticated");
 	});
 });
 

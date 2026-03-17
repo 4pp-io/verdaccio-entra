@@ -150,6 +150,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - `security.api.jwt.sign.expiresIn` controls Verdaccio token lifetime (default: 7d in Docker config)
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)
+- **Username Mutability Risk:** Verdaccio derives package ownership from the username entered during `npm login`, and this plugin validates it against the token's `preferred_username`, `upn`, or `email` claim. **Microsoft Entra ID considers these claims mutable.** If a user's UPN changes (e.g., due to marriage or a legal name change), they will `npm login` with their new name and it will succeed. However, any previously published packages will still display their old username in the metadata. This is a cosmetic artifact of Verdaccio's architecture, not a security vulnerability. Access control remains secure because package access is governed by immutable group claims (`$authenticated` and Entra ID groups/roles), not by string-matching the author's username.
 - Username must match Entra identity — prevents audit log spoofing via `npm login`
 - Group-based access control requires your Entra app registration to emit `groups` or `roles` claims
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection

@@ -46,6 +46,30 @@ function assertGuid(value: string, label: string): void {
 	}
 }
 
+/**
+ * Resolve plugin configuration from YAML config and environment variables.
+ *
+ * Verdaccio does NOT interpolate `${VAR}` in plugin config blocks — only a
+ * hardcoded whitelist (http_proxy, https_proxy, no_proxy, VERDACCIO_STORAGE_PATH).
+ * This function explicitly resolves env overrides so the constructor stays pure.
+ *
+ * Precedence: env var > config.yaml value > default.
+ *
+ * @see https://www.verdaccio.org/docs/env/
+ */
+export function resolveConfig(
+	config: EntraConfig,
+	env: Record<string, string | undefined> = process.env,
+): { clientId: string; tenantId: string; authority: string; audience: string } {
+	const clientId = env["ENTRA_CLIENT_ID"] ?? config.clientId;
+	const tenantId = env["ENTRA_TENANT_ID"] ?? config.tenantId;
+	const authority = env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
+	const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
+	assertGuid(clientId, "clientId");
+	assertGuid(tenantId, "tenantId");
+	return { clientId, tenantId, authority, audience };
+}
+
 /** OIDC discovery response shape (subset we need) */
 export interface OidcDiscovery {
 	issuer: string;
@@ -92,24 +116,21 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _maxTokenBytes: number;
 	private _ready: Promise<void>;
 	private _discoveryFailed = false;
+	private _retryInflight = false;
 	private _discoveryRetries: number;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
-		const clientId = process.env["ENTRA_CLIENT_ID"] ?? config.clientId;
-		const tenantId = process.env["ENTRA_TENANT_ID"] ?? config.tenantId;
-		const authority = process.env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
-		assertGuid(clientId, "clientId");
-		assertGuid(tenantId, "tenantId");
-		this._entraConfig = { ...config, clientId, tenantId, authority };
-		this._audience = process.env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
+		const resolved = resolveConfig(config);
+		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
+		this._audience = resolved.audience;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
 		this._discoveryRetries = config.discoveryRetries ?? 3;
 		this._logger = appOptions.logger;
 
-		this._ready = this._initWithRetry(authority, tenantId, this._discoveryRetries);
+		this._ready = this._initWithRetry(resolved.authority, resolved.tenantId, this._discoveryRetries);
 
-		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", tenantId, authority, this._audience);
+		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", resolved.tenantId, resolved.authority, this._audience);
 	}
 
 	/**
@@ -216,9 +237,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * createRemoteJWKSet handles JWKS fetching, caching, and key rotation.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
-		if (this._discoveryFailed) {
+		if (this._discoveryFailed && !this._retryInflight) {
 			const { authority, tenantId } = this._entraConfig;
-			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId, this._discoveryRetries);
+			this._retryInflight = true;
+			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId, this._discoveryRetries)
+				.finally(() => { this._retryInflight = false; });
 		}
 
 		await this._ready;
