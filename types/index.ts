@@ -14,6 +14,8 @@
 export interface EntraConfig {
 	clientId: string;
 	tenantId: string;
+	/** Max OIDC discovery retry attempts. Default: 3. Set to 1 in tests. */
+	discoveryRetries?: number;
 	/**
 	 * Maximum token size in bytes before rejecting without parsing.
 	 * Entra tokens with many group claims can reach 16-20KB.

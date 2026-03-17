@@ -6,7 +6,7 @@
 # @see https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
 # --- Stage 1: Build ---
-FROM node:lts-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /build
 

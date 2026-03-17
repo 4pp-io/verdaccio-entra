@@ -124,23 +124,19 @@ describe("EntraPlugin constructor", () => {
 
 describe("OIDC discovery failure", () => {
 	it("rejects auth when discovery fails", async () => {
-		// Test that a failed discovery results in a service error on authenticate.
-		// We don't test the full retry+backoff timing here because mixing fake timers
-		// with async fetch mocks is fragile. The retry logic is structural — if
-		// _initWithRetry is called and fetch returns failure, the plugin ends up
-		// in _discoveryFailed=true state and rejects with a service error.
 		mockFetch.mockResolvedValue({ ok: false, status: 400 });
 
-		const plugin = createPlugin();
-		// Give the constructor's _initWithRetry time to exhaust retries (3 × backoff)
-		// Since mock fetch resolves instantly, the only delay is setTimeout backoffs
-		await new Promise((r) => { setTimeout(r, 8000); });
+		// discoveryRetries: 1 = single attempt, no backoff delay
+		const plugin = createPlugin({ discoveryRetries: 1 });
+		// Wait for the single discovery attempt to complete
+		// eslint-disable-next-line -- accessing private for test
+		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
 
 		const token = signToken(validPayload());
 		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
 
 		setFetchSuccess();
-	}, 15_000); // Extended timeout for real retry backoff
+	});
 });
 
 describe("authenticate", () => {

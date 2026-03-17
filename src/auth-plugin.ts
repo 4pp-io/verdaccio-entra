@@ -109,6 +109,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _maxTokenBytes: number;
 	private _ready: Promise<void>;
 	private _discoveryFailed = false;
+	private _discoveryRetries: number;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
@@ -120,9 +121,10 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		this._entraConfig = { ...config, clientId, tenantId, authority };
 		this._audience = process.env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+		this._discoveryRetries = config.discoveryRetries ?? 3;
 		this._logger = appOptions.logger;
 
-		this._ready = this._initWithRetry(authority, tenantId);
+		this._ready = this._initWithRetry(authority, tenantId, this._discoveryRetries);
 
 		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", tenantId, authority, this._audience);
 	}
@@ -237,7 +239,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		// Self-healing: if previous discovery failed, re-trigger
 		if (this._discoveryFailed) {
 			const { authority, tenantId } = this._entraConfig;
-			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId);
+			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId, this._discoveryRetries);
 		}
 
 		await this._ready;

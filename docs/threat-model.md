@@ -45,7 +45,7 @@ Entra ID (IdP)          Plugin (JWT validation)         Verdaccio (authz)
 
 ### Denial of Service — Severity: Medium
 - **Threat**: Oversized token payloads; JWKS endpoint flooding
-- **Mitigation**: 8KB token size guard; JWKS client caches keys for 10 minutes
+- **Mitigation**: 16KB token size guard (configurable via maxTokenBytes); JWKS client caches keys for 10 minutes
 - **Residual risk**: Medium — JWKS endpoint unavailability blocks new logins (existing Verdaccio JWTs continue to work); rate limiting is the reverse proxy's responsibility
 
 ### Elevation of Privilege — Severity: High
@@ -59,7 +59,7 @@ Entra ID (IdP)          Plugin (JWT validation)         Verdaccio (authz)
 |-------|-----------|
 | `clientId` config | Must be valid GUID |
 | `tenantId` config | Must be valid GUID |
-| JWT password field | Max 8192 bytes, must decode as JWT, must have `kid` header |
+| JWT password field | Max 16384 bytes (configurable), must decode as JWT, must have `kid` header |
 | JWT signature | RS256 only, verified against JWKS endpoint |
 | JWT claims | Issuer must match tenant, audience must match `api://{clientId}` |
 
