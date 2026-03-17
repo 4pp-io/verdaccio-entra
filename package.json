@@ -67,6 +67,6 @@
 		"check-config": "tsx scripts/check-config.ts",
 		"changeset": "changeset",
 		"version-packages": "changeset version && npm install",
-		"release": "npm run build && changeset publish"
+		"release": "npm run build && changeset publish --provenance"
 	}
 }
