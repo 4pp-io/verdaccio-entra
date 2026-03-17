@@ -117,13 +117,15 @@ export function resolveConfig(
   const tenantId = env["ENTRA_TENANT_ID"] ?? config.tenantId;
   const authority = env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
   const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
-  const failClosed = envBool(env["ENTRA_FAIL_CLOSED"]) ?? config.failClosed ?? false;
-  const allowGroupOverage =
-    envBool(env["ENTRA_ALLOW_GROUP_OVERAGE"]) ?? config.allowGroupOverage ?? false;
-  const maxTokenBytes =
-    envInt(env["ENTRA_MAX_TOKEN_BYTES"]) ?? config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+  const failClosedOverride = envBool(env["ENTRA_FAIL_CLOSED"]);
+  const failClosed = failClosedOverride ?? config.failClosed ?? false;
+  const allowGroupOverageOverride = envBool(env["ENTRA_ALLOW_GROUP_OVERAGE"]);
+  const allowGroupOverage = allowGroupOverageOverride ?? config.allowGroupOverage ?? false;
+  const maxTokenBytesOverride = envInt(env["ENTRA_MAX_TOKEN_BYTES"]);
+  const maxTokenBytes = maxTokenBytesOverride ?? config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+  const clockToleranceSecondsOverride = envInt(env["ENTRA_CLOCK_TOLERANCE_SECONDS"]);
   const clockToleranceSeconds =
-    envInt(env["ENTRA_CLOCK_TOLERANCE_SECONDS"]) ??
+    clockToleranceSecondsOverride ??
     config.clockToleranceSeconds ??
     DEFAULT_CLOCK_TOLERANCE_SECONDS;
 
@@ -133,10 +135,10 @@ export function resolveConfig(
       env["ENTRA_TENANT_ID"] && "tenantId",
       env["ENTRA_AUTHORITY"] && "authority",
       env["ENTRA_AUDIENCE"] && "audience",
-      env["ENTRA_FAIL_CLOSED"] && "failClosed",
-      env["ENTRA_ALLOW_GROUP_OVERAGE"] && "allowGroupOverage",
-      env["ENTRA_MAX_TOKEN_BYTES"] && "maxTokenBytes",
-      env["ENTRA_CLOCK_TOLERANCE_SECONDS"] && "clockToleranceSeconds",
+      failClosedOverride !== undefined && "failClosed",
+      allowGroupOverageOverride !== undefined && "allowGroupOverage",
+      maxTokenBytesOverride !== undefined && "maxTokenBytes",
+      clockToleranceSecondsOverride !== undefined && "clockToleranceSeconds",
     ].filter(Boolean);
     if (overrides.length > 0) {
       logger.info(
@@ -168,7 +170,7 @@ function envBool(value: string | undefined): boolean | undefined {
   return undefined; // invalid value — fall through to config/default
 }
 
-/** Parse an env var as a positive integer, or undefined if not set or invalid. */
+/** Parse an env var as a non-negative integer, or undefined if not set or invalid. */
 function envInt(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
