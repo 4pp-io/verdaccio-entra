@@ -6,7 +6,11 @@ root = true
 end_of_line = lf
 insert_final_newline = true
 
-# 2 space indentation
-[{.,}*.{js,yml,yaml}]
+# Tab indentation for TypeScript source
+[*.ts]
+indent_style = tab
+
+# 2 space indentation for config/CI files
+[{.,}*.{js,yml,yaml,json}]
 indent_style = space
 indent_size = 2

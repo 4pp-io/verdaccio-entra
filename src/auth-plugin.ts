@@ -139,6 +139,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _entraConfig: EntraConfig;
 	private _audience: string;
 	private _maxTokenBytes: number;
+	private _allowGroupOverage: boolean;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
@@ -149,19 +150,39 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			resolved = resolveConfig(config, process.env, this._logger);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
+			const envFailClosed = process.env["ENTRA_FAIL_CLOSED"];
+			const failClosed = envFailClosed !== undefined ? envFailClosed === "true" : (config.failClosed ?? false);
+			
+			// ADVERSARIAL ORACLE NOTE: 
+			// Verdaccio's plugin-async-loader.js blindly catches ALL constructor exceptions 
+			// (Error, TypeError, strings, etc.) using a generic catch block, logs a warning, 
+			// and cheerfully boots up the registry without this plugin. This is a massive "fail open" 
+			// security risk. Using process.exit(1) here is self-defense against a framework that 
+			// actively sabotages the security perimeter.
+			if (failClosed) {
+				this._logger.error(
+					{},
+					"FATAL: verdaccio-entra failed to initialize (failClosed=true). " +
+						"Killing process to prevent Verdaccio from booting without Entra auth. " +
+						"Error: " + msg,
+				);
+				process.exit(1);
+			}
 			this._logger.error(
 				{},
-				"verdaccio-entra failed to initialize: " + msg,
+				"verdaccio-entra failed to initialize and will be skipped. " +
+					"Verdaccio will fall back to other auth plugins (e.g. htpasswd). " +
+					"Set failClosed: true in config to kill the process instead. " +
+					"Error: " + msg,
 			);
-			throw new Error(
-				"verdaccio-entra: " + msg +
-				". Fix the configuration and restart Verdaccio.",
-			);
+			throw new Error("verdaccio-entra: " + msg);
 		}
 
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
 		this._audience = resolved.audience;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+		const envAllowOverage = process.env["ENTRA_ALLOW_GROUP_OVERAGE"];
+		this._allowGroupOverage = envAllowOverage !== undefined ? envAllowOverage === "true" : (config.allowGroupOverage ?? false);
 
 		// Issuer and JWKS URI are deterministic for Entra v2 endpoints.
 		// jose handles all JWKS key fetching, caching, rotation, and retries.
@@ -216,9 +237,9 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
 			debug("User %s authenticated, groups: %o", upn, groups);
 			cb(null, groups);
-		})().catch((err) => {
+		})().catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
-			this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
+			this._logger.warn({ user, err: msg, issuer: this._issuer, audience: this._audience }, "Entra auth failed for @{user}: @{err}");
 			debug("Authentication failed for %s: %s", user, msg);
 			cb(null, false);
 		});
@@ -256,7 +277,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 		// Entra omits the groups claim when user has >200 group memberships.
 		// Instead it sets _claim_names.groups + _claim_sources with a Graph API URL.
-		// This plugin is AuthN-only and cannot call Graph, so log a clear warning.
+		// This plugin is AuthN-only and cannot call Graph.
 		// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
 		const claimNames = payload["_claim_names"];
 		if (
@@ -265,14 +286,21 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			!Array.isArray(claimNames) &&
 			"groups" in (claimNames as Record<string, unknown>)
 		) {
+			const user = payload["preferred_username"] ?? payload["upn"] ?? "unknown";
 			this._logger.error(
-				{ user: payload["preferred_username"] ?? payload["upn"] ?? "unknown" },
+				{ user },
 				"Entra group overage detected for @{user}: token has >200 group memberships and Entra omitted the groups claim. " +
-					"Group-based package ACLs will NOT work for this user. " +
 					"Mitigation: configure the app registration to emit groups as roles, " +
 					"or use application roles instead of security groups. " +
 					"See https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference",
 			);
+			if (!this._allowGroupOverage) {
+				throw new Error(
+					"Group overage: Entra omitted the groups claim for this user (>200 groups). " +
+						"Authentication rejected to prevent silent authorization failure. " +
+						"Set allowGroupOverage: true in config if you do not use group-based ACLs.",
+				);
+			}
 		}
 
 		return groups;

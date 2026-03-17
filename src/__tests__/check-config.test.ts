@@ -1,24 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
-import { ISSUERS } from "../auth-plugin";
 import { runChecks, countFailures, expectedAudience } from "../check-config";
 import type { CheckConfigInput } from "../check-config";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-function setDiscoverySuccess(issuer?: string): void {
+function setJwksSuccess(): void {
 	mockFetch.mockResolvedValue({
 		ok: true,
 		json: () => Promise.resolve({
-			issuer: issuer ?? ISSUERS.v2(TEST_TENANT),
-			jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`,
+			keys: [
+				{ kid: "test-key" }
+			]
 		}),
 	});
 }
 
-function setDiscoveryFailure(): void {
+function setJwksFailure(): void {
 	mockFetch.mockResolvedValue({ ok: false, status: 400 });
+}
+
+function setJwksInvalidShape(): void {
+	mockFetch.mockResolvedValue({
+		ok: true,
+		json: () => Promise.resolve({
+			keys: "not-an-array"
+		}),
+	});
 }
 
 function input(overrides?: Partial<CheckConfigInput>): CheckConfigInput {
@@ -30,7 +39,7 @@ function input(overrides?: Partial<CheckConfigInput>): CheckConfigInput {
 }
 
 beforeEach(() => {
-	setDiscoverySuccess();
+	setJwksSuccess();
 });
 
 describe("runChecks", () => {
@@ -39,9 +48,7 @@ describe("runChecks", () => {
 		const failures = countFailures(results);
 		expect(failures).toBe(0);
 		expect(results.some((r) => r.label === "Client ID is set" && r.ok)).toBe(true);
-		expect(results.some((r) => r.label === "OIDC discovery is reachable" && r.ok)).toBe(true);
-		expect(results.some((r) => r.label === "Issuer matches tenant ID" && r.ok)).toBe(true);
-		expect(results.some((r) => r.label === "JWKS URI discovered" && r.ok)).toBe(true);
+		expect(results.some((r) => r.label === "JWKS endpoint is reachable and returns keys" && r.ok)).toBe(true);
 	});
 
 	it("fails when client ID is empty", async () => {
@@ -79,32 +86,33 @@ describe("runChecks", () => {
 		expect(results.find((r) => r.label === "Client ID and Tenant ID are different")).toBeUndefined();
 	});
 
-	it("detects OIDC discovery failure", async () => {
-		setDiscoveryFailure();
+	it("detects JWKS endpoint failure", async () => {
+		setJwksFailure();
 		const results = await runChecks(input());
-		const fail = results.find((r) => r.label === "OIDC discovery is reachable");
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
 		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("JWKS endpoint unreachable: HTTP 400");
 	});
 
-	it("detects issuer mismatch", async () => {
-		setDiscoverySuccess("https://wrong-issuer.example.com/v2.0");
+	it("detects invalid JWKS shape", async () => {
+		setJwksInvalidShape();
 		const results = await runChecks(input());
-		const fail = results.find((r) => r.label === "Issuer matches tenant ID");
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
 		expect(fail?.ok).toBe(false);
-		expect(fail?.detail).toContain("wrong-issuer");
+		expect(fail?.detail).toContain("invalid data");
 	});
 
 	it("handles network error gracefully", async () => {
 		mockFetch.mockRejectedValue(new Error("ENOTFOUND"));
 		const results = await runChecks(input());
-		const fail = results.find((r) => r.label === "OIDC discovery is reachable");
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
 		expect(fail?.ok).toBe(false);
 		expect(fail?.detail).toContain("ENOTFOUND");
 	});
 
 	it("skips network checks when tenant is not a valid GUID", async () => {
 		const results = await runChecks(input({ tenantId: "not-guid" }));
-		expect(results.find((r) => r.label === "OIDC discovery is reachable")).toBeUndefined();
+		expect(results.find((r) => r.label === "JWKS endpoint is reachable and returns keys")).toBeUndefined();
 	});
 });
 

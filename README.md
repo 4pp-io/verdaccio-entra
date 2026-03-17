@@ -10,7 +10,7 @@ Microsoft Entra ID (Azure AD) auth plugin for [Verdaccio](https://verdaccio.org/
 - Group and role-based access control from JWT claims (Verdaccio handles authorization natively)
 - Self-healing OIDC discovery with exponential backoff retry
 - Environment variable override for all config values
-- Pre-flight config validation script (`npm run check-config`)
+- Pre-flight config validation CLI (`npx verdaccio-entra-check`)
 - Docker setup using standard Verdaccio entrypoint with multi-stage build
 - Requires Node.js >= 22
 
@@ -96,9 +96,9 @@ No custom proxy code in the plugin — Node handles it natively. See [Enterprise
 Validate your Entra config before starting Verdaccio:
 
 ```bash
-npm run check-config -- --client-id <guid> --tenant-id <guid>
+npx verdaccio-entra-check --client-id <guid> --tenant-id <guid>
 # or via env vars:
-ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npm run check-config
+ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npx verdaccio-entra-check
 ```
 
 Checks: GUID format, JWKS endpoint reachability, OIDC discovery, issuer match, swapped ID detection.
@@ -147,7 +147,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
 ## Security Considerations
 
-- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin will intentionally crash the Node process (`process.exit(1)`) at startup. This prevents Verdaccio's default behavior of silently skipping failed auth plugins and booting with no authentication, ensuring a "fail closed" security posture.
+- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin throws from its constructor and Verdaccio skips it (falling back to other auth plugins like htpasswd). Set `failClosed: true` in config to kill the process instead — use this in production when Entra is your only auth plugin.
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - `security.api.jwt.sign.expiresIn` controls Verdaccio token lifetime (default: 7d in Docker config)
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)

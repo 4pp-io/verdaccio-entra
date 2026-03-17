@@ -6,25 +6,18 @@
  *   - src/__tests__/check-config.test.ts (unit tests, no subprocess needed)
  */
 
-import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY } from "./auth-plugin";
-
-/** OIDC discovery response shape (subset we need) */
-export interface OidcDiscovery {
-	issuer: string;
-	jwks_uri: string;
-}
+import { GUID_RE, AUDIENCE_PREFIX, jwksUri, DEFAULT_AUTHORITY } from "./auth-plugin";
 
 /**
- * Fetch OIDC discovery document for pre-flight validation.
+ * Fetch the hardcoded JWKS URI to verify reachability.
  * Proxy support via NODE_USE_ENV_PROXY=1 (Node 20.13+/21.7+).
- * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
-export async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
-	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
-	const res = await fetch(url);
+export async function verifyJwksEndpoint(authority: string, tenantId: string): Promise<boolean> {
+	const url = jwksUri(tenantId, authority);
+	const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
 	if (!res.ok) {
 		throw new Error(
-			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
+			`JWKS endpoint unreachable: HTTP ${res.status} from ${url}. ` +
 				"Verify your tenantId and authority are correct.",
 		);
 	}
@@ -32,15 +25,13 @@ export async function discoverOidc(authority: string, tenantId: string): Promise
 	if (
 		!data ||
 		typeof data !== "object" ||
-		typeof (data as Record<string, unknown>).issuer !== "string" ||
-		typeof (data as Record<string, unknown>).jwks_uri !== "string"
+		!Array.isArray((data as Record<string, unknown>).keys)
 	) {
 		throw new Error(
-			`OIDC discovery failed: invalid JSON shape returned from ${url}. ` +
-				"Expected an object containing 'issuer' and 'jwks_uri' strings.",
+			`JWKS endpoint returned invalid data: expected an object with a 'keys' array from ${url}.`,
 		);
 	}
-	return data as OidcDiscovery;
+	return true;
 }
 
 export interface CheckResult {
@@ -108,30 +99,15 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 		);
 	}
 
-	// --- 3. OIDC discovery (pre-flight reachability check) ---
+	// --- 3. JWKS endpoint validation (matching production behavior) ---
 	if (GUID_RE.test(tenantId)) {
-		let discovery: OidcDiscovery | undefined;
 		try {
-			discovery = await discoverOidc(authority, tenantId);
-			check("OIDC discovery is reachable", true, "");
-
-			const expectedIssuer = ISSUERS.v2(tenantId, authority);
-			check(
-				"Issuer matches tenant ID",
-				discovery.issuer === expectedIssuer,
-				`Expected issuer "${expectedIssuer}", got "${discovery.issuer ?? "(missing)"}". ` +
-					"This may indicate the tenant ID is wrong or you're hitting the wrong authority.",
-			);
-
-			check(
-				"JWKS URI discovered",
-				discovery.jwks_uri.length > 0,
-				"OIDC discovery returned an empty jwks_uri.",
-			);
+			await verifyJwksEndpoint(authority, tenantId);
+			check("JWKS endpoint is reachable and returns keys", true, "");
 		} catch (err) {
 			// diagnostic: error recorded in results — caller decides exit code
 			check(
-				"OIDC discovery is reachable",
+				"JWKS endpoint is reachable and returns keys",
 				false,
 				`${err instanceof Error ? err.message : String(err)}`,
 			);

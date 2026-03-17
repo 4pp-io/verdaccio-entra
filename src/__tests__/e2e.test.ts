@@ -17,6 +17,36 @@ import { importJWK, SignJWT } from "jose";
 const TEST_CLIENT = "11112222-3333-4444-5555-666677778888";
 const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
 const TEST_USER = "e2e-user@contoso.com";
+const TEST_USER_OID = "00000000-0000-0000-0000-000000000001";
+const TEST_USER_SUB = "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ";
+const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
+
+/**
+ * Build a realistic Entra v2.0 access token payload for e2e tests.
+ * Authority is dynamic (mock server URL), so iss must be overridden per-call.
+ * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+ */
+function e2eClaims(authority: string, overrides?: Record<string, unknown>): Record<string, unknown> {
+	return {
+		aud: `api://${TEST_CLIENT}`,
+		iss: `${authority}/${TEST_TENANT}/v2.0`,
+		tid: TEST_TENANT,
+		oid: TEST_USER_OID,
+		sub: TEST_USER_SUB,
+		ver: "2.0",
+		azp: TEST_AZP,
+		azpacr: "0",
+		preferred_username: TEST_USER,
+		name: "E2E Test User",
+		scp: "access_as_user",
+		groups: ["developers"],
+		roles: ["registry-admin"],
+		uti: "AbCdEf123456",
+		aio: "ASQy/4TAAAAA",
+		rh: "0.AAAA",
+		...overrides,
+	};
+}
 
 let network: StartedNetwork;
 let mockJwks: StartedTestContainer;
@@ -97,13 +127,7 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 		const privateKey = await importJWK(privateJwk, "RS256");
 
 		const authority = "http://mock-jwks:9877";
-		const token = await new SignJWT({
-			preferred_username: TEST_USER,
-			iss: `${authority}/${TEST_TENANT}/v2.0`,
-			aud: `api://${TEST_CLIENT}`,
-			groups: ["developers"],
-			roles: ["registry-admin"],
-		})
+		const token = await new SignJWT(e2eClaims(authority))
 			.setProtectedHeader({ alg: "RS256", kid })
 			.setIssuedAt()
 			.setExpirationTime("5m")
@@ -131,6 +155,34 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 		expect([401, 403, 409]).toContain(res.status);
 	});
 
+	it("rejects group overage token (>200 groups, allowGroupOverage=false by default)", async () => {
+		const mockJwksHost = mockJwks.getHost();
+		const mockJwksPort = mockJwks.getMappedPort(9877);
+		const keysRes = await fetch(`http://${mockJwksHost}:${mockJwksPort}/_test/keys.json`);
+		const { privateJwk, kid } = await keysRes.json();
+		const privateKey = await importJWK(privateJwk, "RS256");
+
+		const authority = "http://mock-jwks:9877";
+		const token = await new SignJWT(e2eClaims(authority, {
+			groups: undefined,
+			_claim_names: { groups: "src1" },
+			_claim_sources: { src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" } },
+		}))
+			.setProtectedHeader({ alg: "RS256", kid })
+			.setIssuedAt()
+			.setExpirationTime("5m")
+			.sign(privateKey);
+
+		const res = await fetch(`${verdaccioUrl}/-/user/org.couchdb.user:${TEST_USER}`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: TEST_USER, password: token }),
+		});
+
+		// Plugin rejects — Verdaccio returns 401 or 409 (depends on version)
+		expect([401, 403, 409]).toContain(res.status);
+	});
+
 	it("rejects username mismatch (anti-spoofing)", async () => {
 		const mockJwksHost = mockJwks.getHost();
 		const mockJwksPort = mockJwks.getMappedPort(9877);
@@ -139,11 +191,9 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 		const privateKey = await importJWK(privateJwk, "RS256");
 
 		const authority = "http://mock-jwks:9877";
-		const token = await new SignJWT({
+		const token = await new SignJWT(e2eClaims(authority, {
 			preferred_username: "real-user@contoso.com",
-			iss: `${authority}/${TEST_TENANT}/v2.0`,
-			aud: `api://${TEST_CLIENT}`,
-		})
+		}))
 			.setProtectedHeader({ alg: "RS256", kid })
 			.setIssuedAt()
 			.setExpirationTime("5m")
@@ -156,5 +206,53 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 		});
 
 		expect(res.status).toBe(401);
+	});
+});
+
+describe("e2e: failClosed behavior", () => {
+	it("default (failClosed=false): Verdaccio boots with invalid config (plugin skipped)", { timeout: 90_000 }, async () => {
+		const image = await GenericContainer.fromDockerfile("./", "Dockerfile")
+			.withCache(true)
+			.build();
+
+		const container = await image
+			.withExposedPorts(4873)
+			.withEnvironment({
+				ENTRA_CLIENT_ID: "not-a-guid",
+				ENTRA_TENANT_ID: "also-not-a-guid",
+			})
+			.withLogConsumer(logConsumer("failClosed=false"))
+			.withWaitStrategy(Wait.forLogMessage("http address"))
+			.withStartupTimeout(60_000)
+			.start();
+
+		try {
+			const port = container.getMappedPort(4873);
+			const res = await fetch(`http://${container.getHost()}:${port}/-/ping`);
+			expect(res.ok).toBe(true);
+		} finally {
+			await container.stop().catch(() => {});
+		}
+	});
+
+	it("failClosed=true: Verdaccio crashes with invalid config", { timeout: 90_000 }, async () => {
+		const image = await GenericContainer.fromDockerfile("./", "Dockerfile")
+			.withCache(true)
+			.build();
+
+		// Wait.forOneShotStartup() expects exit code 0.
+		// process.exit(1) exits non-zero, so start() rejects immediately.
+		await expect(
+			image
+				.withEnvironment({
+					ENTRA_CLIENT_ID: "not-a-guid",
+					ENTRA_TENANT_ID: "also-not-a-guid",
+					ENTRA_FAIL_CLOSED: "true",
+				})
+				.withLogConsumer(logConsumer("failClosed=true"))
+				.withWaitStrategy(Wait.forOneShotStartup())
+				.withStartupTimeout(60_000)
+				.start(),
+		).rejects.toThrow();
 	});
 });
