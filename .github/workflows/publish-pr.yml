@@ -111,7 +111,7 @@ jobs:
 
       - name: Post comment with published version
         run: |
-          cat <<'BODY' > /tmp/comment-body.md
+          cat <<BODY > /tmp/comment-body.md
           Published snapshot `${SNAPSHOT_TAG}` in response to [this comment](${COMMENT_URL}). Install with `npm i @4pp-io/verdaccio-entra@${PUBLISH_TAG}`
           BODY
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md

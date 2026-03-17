@@ -58,7 +58,7 @@ jobs:
           done <<< "$CHANGED"
 
           for context in build-and-test secret-scanning; do
-            gh api "repos/$GITHUB_REPOSITORY/statuses/${PR_SHA}" \
+            gh api "/repos/$GITHUB_REPOSITORY/statuses/${PR_SHA}" \
               -f state=success \
               -f context="$context" \
               -f description="Skipped for Version Packages PR (version/changelog only)"

@@ -38,10 +38,10 @@ jobs:
 
       - name: Checkout (for production deps changeset)
         if: contains(github.event.workflow_run.head_branch, '/production-dependencies')
-        uses: actions/checkout@v6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Generate changeset for production dependencies
         id: changeset
