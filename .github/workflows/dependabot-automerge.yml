@@ -22,13 +22,14 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           PR=$(gh pr list \
             --repo "${{ github.repository }}" \
-            --head "${{ github.event.workflow_run.head_branch }}" \
+            --head "$HEAD_BRANCH" \
             --json url,number --jq '.[0]')
           if [ -z "$PR" ] || [ "$PR" = "null" ]; then
-            echo "::error::No PR found for branch ${{ github.event.workflow_run.head_branch }}"
+            echo "::error::No PR found for branch $HEAD_BRANCH"
             exit 1
           fi
           echo "url=$(echo "$PR" | jq -r '.url')" >> "$GITHUB_OUTPUT"
@@ -39,6 +40,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
+          persist-credentials: false
 
       - name: Generate changeset for production dependencies
         id: changeset
@@ -46,8 +48,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.pr.outputs.url }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          CHANGESET_FILE=".changeset/dependabot-${{ steps.pr.outputs.number }}.md"
+          CHANGESET_FILE=".changeset/dependabot-$PR_NUMBER.md"
           if [ -f "$CHANGESET_FILE" ]; then
             echo "Changeset already exists, skipping"
             echo "created=false" >> "$GITHUB_OUTPUT"

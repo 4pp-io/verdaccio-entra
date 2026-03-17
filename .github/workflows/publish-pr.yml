@@ -52,20 +52,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          persist-credentials: false
 
       - name: Checkout pull request
-        run: gh pr checkout ${{ github.event.issue.number }}
+        run: gh pr checkout "$PR_NUMBER"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - name: Check if Version Packages PR
         id: check_version_packages
         run: |
-          IS_VERSION_PACKAGES_PR=$(gh pr view ${{ github.event.issue.number }} --json headRefName --jq '.headRefName|startswith("changeset-release/")')
+          IS_VERSION_PACKAGES_PR=$(gh pr view "$PR_NUMBER" --json headRefName --jq '.headRefName|startswith("changeset-release/")')
           echo "is_version_packages_pr=$IS_VERSION_PACKAGES_PR" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       # for Version Packages PR we want to publish the state from before the Version Packages commit
       - name: Reset Version Packages PR
@@ -73,7 +77,7 @@ jobs:
         run: git reset --hard HEAD~1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8
         with:
           node-version: 22
           cache: npm
@@ -105,9 +109,10 @@ jobs:
           cat <<'BODY' > /tmp/comment-body.md
           Published snapshot `${{ steps.snapshot_version.outputs.snapshot_tag }}` in response to [this comment](${{ github.event.comment.html_url }}). Install with `npm i @4pp-io/verdaccio-entra@${{ steps.snapshot_version.outputs.publish_tag }}`
           BODY
-          gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/comment-body.md
+          gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - name: Post failure comment
         if: failure()
@@ -118,9 +123,10 @@ jobs:
           cat <<BODY > /tmp/comment-body.md
           Snapshot publish triggered by [this comment](${{ github.event.comment.html_url }}) failed. [See the failed job](${LINK}).
           BODY
-          gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/comment-body.md
+          gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - name: Add result reaction
         if: always() && steps.report_in_progress.outcome == 'success'
