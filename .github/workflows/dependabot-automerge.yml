@@ -71,6 +71,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
           git add .changeset/
           git commit -m "chore: add changeset for dependabot update"
           git push
