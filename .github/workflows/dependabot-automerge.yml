@@ -1,8 +1,11 @@
-name: Dependabot auto-merge
+name: Dependabot automation
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches:
+      - "dependabot/**"
 
 permissions:
   contents: write
@@ -11,23 +14,73 @@ permissions:
 jobs:
   dependabot:
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
     steps:
-      - name: Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v2
+      - name: Find PR for Dependabot branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --head "${{ github.event.workflow_run.head_branch }}" \
+            --json url,number --jq '.[0]')
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            echo "::error::No PR found for branch ${{ github.event.workflow_run.head_branch }}"
+            exit 1
+          fi
+          echo "url=$(echo "$PR" | jq -r '.url')" >> "$GITHUB_OUTPUT"
+          echo "number=$(echo "$PR" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout (for production deps changeset)
+        if: contains(github.event.workflow_run.head_branch, '/production-dependencies')
+        uses: actions/checkout@v6
         with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Generate changeset for production dependencies
+        id: changeset
+        if: contains(github.event.workflow_run.head_branch, '/production-dependencies')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          CHANGESET_FILE=".changeset/dependabot-${{ steps.pr.outputs.number }}.md"
+          if [ -f "$CHANGESET_FILE" ]; then
+            echo "Changeset already exists, skipping"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_TITLE=$(gh pr view "$PR_URL" --json title --jq '.title')
+
+          cat > "$CHANGESET_FILE" << EOF
+          ---
+          '@4pp-io/verdaccio-entra': patch
+          ---
+
+          $PR_TITLE
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .changeset/
+          git commit -m "chore: add changeset for dependabot update"
+          git push
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       - name: Approve Dependabot PR
+        if: steps.changeset.outputs.created != 'true'
+        env:
+          PR_URL: ${{ steps.pr.outputs.url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge for devDependencies
-        if: steps.metadata.outputs.dependency-type == 'direct:development'
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Enable auto-merge
+        if: steps.changeset.outputs.created != 'true'
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "$PR_URL"
