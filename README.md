@@ -5,12 +5,11 @@ Microsoft Entra ID (Azure AD) auth plugin for [Verdaccio](https://verdaccio.org/
 ## Features
 
 - Validates Entra ID access tokens using JWKS (RS256) with rate-limited key fetching
-- Sovereign cloud support (Azure Public, US Government, China) via OIDC discovery
+- Sovereign cloud support (Azure Public, US Government, China) via configurable `authority` URL
 - Username enforcement — npm login username must match Entra identity (anti-spoofing)
 - Group and role-based access control from JWT claims (Verdaccio handles authorization natively)
-- Self-healing OIDC discovery with exponential backoff retry
 - Environment variable override for all config values
-- Pre-flight config validation script (`npm run check-config`)
+- Pre-flight config validation CLI (`npx verdaccio-entra-check`)
 - Docker setup using standard Verdaccio entrypoint with multi-stage build
 - Requires Node.js >= 22
 
@@ -31,7 +30,9 @@ auth:
     tenantId: "your-tenant-id"   # or ENTRA_TENANT_ID env var
     # audience: "api://your-client-id"     # or ENTRA_AUDIENCE (default: api://{clientId})
     # authority: "https://login.microsoftonline.us"  # or ENTRA_AUTHORITY (default: public cloud)
-    # maxTokenBytes: 16384                 # default: 16KB
+    # maxTokenBytes: 256000               # default: 256,000 bytes (matches Microsoft's DefaultMaximumTokenSizeInBytes)
+    # failClosed: true                    # or ENTRA_FAIL_CLOSED=true — kill process on config error (use when Entra is your only auth plugin)
+    # allowGroupOverage: false            # or ENTRA_ALLOW_GROUP_OVERAGE=true — allow auth when >200 groups causes overage (default: reject)
 
 # Use $authenticated on all packages — Verdaccio best practice for private registries
 # @see https://verdaccio.org/docs/best#strong-package-access-with-authenticated
@@ -75,10 +76,12 @@ All config values can be overridden via environment variables (takes precedence 
 | `ENTRA_TENANT_ID` | `tenantId` | — | Directory (tenant) ID |
 | `ENTRA_AUDIENCE` | `audience` | `api://{clientId}` | Expected token audience (override for custom App ID URIs) |
 | `ENTRA_AUTHORITY` | `authority` | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud)) |
+| `ENTRA_FAIL_CLOSED` | `failClosed` | `false` | Kill process on config error (`true` = `process.exit(1)`) |
+| `ENTRA_ALLOW_GROUP_OVERAGE` | `allowGroupOverage` | `false` | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
 
 ### Proxy Support
 
-For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node 22.21+ built-in that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both OIDC discovery (`fetch`) and JWKS key fetching (`https.request`).
+For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node.js core feature ([stable since Node 20.13.0 / 21.7.0](https://nodejs.org/en/learn/http/enterprise-network-configuration)) that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both token fetching (`fetch`) and JWKS key fetching (`https.request`).
 
 ```bash
 docker run -p 4873:4873 \
@@ -96,18 +99,18 @@ No custom proxy code in the plugin — Node handles it natively. See [Enterprise
 Validate your Entra config before starting Verdaccio:
 
 ```bash
-npm run check-config -- --client-id <guid> --tenant-id <guid>
+npx verdaccio-entra-check --client-id <guid> --tenant-id <guid>
 # or via env vars:
-ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npm run check-config
+ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npx verdaccio-entra-check
 ```
 
-Checks: GUID format, JWKS endpoint reachability, OIDC discovery, issuer match, swapped ID detection.
+Checks: GUID format, swapped ID detection, JWKS endpoint reachability and key shape.
 
 ## Auth Flow
 
 1. User obtains an Entra access token client-side (e.g., via [MSAL](https://learn.microsoft.com/entra/msal/) or [`@4pp-io/r`](https://www.npmjs.com/package/@4pp-io/r))
 2. `npm login --registry=<url>` — username must match your Entra email/UPN
-3. Plugin validates the JWT against Entra's JWKS endpoint via OIDC discovery
+3. Plugin validates the JWT directly against Entra's JWKS endpoint (deterministic URI, no OIDC discovery)
 4. Plugin verifies username matches the token's identity (anti-spoofing)
 5. Verdaccio issues its own HS256 JWT and handles all authorization using the Entra groups
 
@@ -147,7 +150,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
 ## Security Considerations
 
-- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin will intentionally crash the Node process (`process.exit(1)`) at startup. This prevents Verdaccio's default behavior of silently skipping failed auth plugins and booting with no authentication, ensuring a "fail closed" security posture.
+- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin throws from its constructor and Verdaccio skips it (falling back to other auth plugins like htpasswd). Set `failClosed: true` in config (or `ENTRA_FAIL_CLOSED=true` in the environment) to kill the process instead — use this in production when Entra is your only auth plugin. For large tenants where Entra may emit a groups overage error and omit group membership, you can relax this behavior by setting `allowGroupOverage: true` (or `ENTRA_ALLOW_GROUP_OVERAGE=true`) so that authentication can still proceed even if all group memberships cannot be resolved.
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - `security.api.jwt.sign.expiresIn` controls Verdaccio token lifetime (default: 7d in Docker config)
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)
@@ -155,10 +158,10 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 - Username must match Entra identity — prevents audit log spoofing via `npm login`
 - **Prefer App Roles over Groups:** Entra ID `groups` claims contain opaque GUIDs (Object IDs), making `config.yaml` unreadable. [App Roles](https://learn.microsoft.com/entra/identity-platform/howto-add-app-roles-in-apps) emit human-readable strings in the `roles` claim (e.g., `Package.Publisher`). Microsoft [recommends App Roles](https://learn.microsoft.com/security/zero-trust/develop/configure-tokens-group-claims-app-roles#groups-and-app-roles) over groups for application authorization. Both are supported — the plugin merges `groups` and `roles` into the array returned to Verdaccio
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection
-- Token payloads exceeding 16KB (configurable via `maxTokenBytes`) are rejected before JWT parsing
+- Token payloads exceeding 256,000 bytes (configurable via `maxTokenBytes`) are rejected before JWT parsing
 - JWKS key fetching is rate-limited (10 req/min) to prevent kid-spoofing DoS
 - Rotating the Verdaccio `secret` invalidates all existing client tokens (forces re-login)
-- **Corporate proxy:** Node's native `fetch` (used for OIDC discovery) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
+- **Corporate proxy:** Node's native `fetch` (used for JWKS key fetching) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
 
 ## License
 

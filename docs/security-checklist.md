@@ -22,7 +22,7 @@ Each item maps to a specific SDL requirement ID.
 - [ ] Logging: success/failed auth with UPN, no secrets in logs (I-8)
 - [ ] No hardcoded paths, secrets, or connection strings (I-9)
 - [ ] Deny-all default: access requires `$authenticated` unless explicitly `$all` (I-10)
-- [ ] Uses established libraries (`jsonwebtoken`, `jwks-rsa`) not custom crypto (I-14, C-28)
+- [ ] Uses established libraries (`jose` — Web Crypto, zero deps) not custom crypto (I-14, C-28)
 
 ## Code Quality (SDL I/V)
 - [ ] `tsc --noEmit` passes with `strict: true` (no `noImplicitAny: false`)
@@ -39,7 +39,7 @@ Each item maps to a specific SDL requirement ID.
 
 ## Authentication Security
 - [ ] `clientId` and `tenantId` validated as GUIDs at startup
-- [ ] Token size bounded (16KB default, configurable via maxTokenBytes) before parsing
+- [ ] Token size bounded (256KB default, configurable via maxTokenBytes) before parsing
 - [ ] Expired tokens are rejected
 - [ ] Unknown/missing `kid` headers are rejected
 

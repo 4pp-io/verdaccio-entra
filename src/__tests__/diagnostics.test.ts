@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { SignJWT, generateKeyPair, errors as joseErrors } from "jose";
-import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
+import { TEST_TENANT, TEST_CLIENT, entraV2Claims } from "./fixtures";
 import { detectSwappedIds, enrichJoseError } from "../diagnostics";
 import type { EntraConfig } from "../../types/index";
 
@@ -22,7 +22,7 @@ async function sign(claims: Record<string, unknown>): Promise<string> {
 
 describe("detectSwappedIds", () => {
 	it("returns undefined when IDs are correct", async () => {
-		const token = await sign({ tid: TEST_TENANT, aud: `api://${TEST_CLIENT}` });
+		const token = await sign(entraV2Claims());
 		expect(detectSwappedIds(token, config)).toBeUndefined();
 	});
 

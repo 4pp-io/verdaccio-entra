@@ -1,19 +1,19 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 /**
- * verdaccio-entra config checker (CLI wrapper)
+ * verdaccio-entra config checker (CLI)
  *
  * Thin CLI around src/check-config.ts — all logic is in the importable module.
  *
  * Usage:
- *   npm run check-config -- --client-id=<guid> --tenant-id=<guid>
- *   npm run check-config -- -c <guid> -t <guid>
- *   ENTRA_CLIENT_ID=<guid> ENTRA_TENANT_ID=<guid> npm run check-config
- *   npm run check-config -- --help
+ *   npx verdaccio-entra-check --client-id=<guid> --tenant-id=<guid>
+ *   npx verdaccio-entra-check -c <guid> -t <guid>
+ *   ENTRA_CLIENT_ID=<guid> ENTRA_TENANT_ID=<guid> npx verdaccio-entra-check
+ *   npx verdaccio-entra-check --help
  */
 
 import { parseArgs } from "node:util";
-import { GUID_RE } from "../src/auth-plugin";
-import { runChecks, expectedAudience, countFailures } from "../src/check-config";
+import { GUID_RE } from "./auth-plugin";
+import { runChecks, expectedAudience, countFailures } from "./check-config";
 
 const { values: flags } = parseArgs({
 	options: {
@@ -43,8 +43,8 @@ Environment variables (used as fallback when flags are not provided):
   ENTRA_TENANT_ID          Same as --tenant-id
 
 Examples:
-  npm run check-config -- -c 00000000-... -t 11111111-...
-  ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npm run check-config
+  npx verdaccio-entra-check -c 00000000-... -t 11111111-...
+  ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npx verdaccio-entra-check
 `);
 	process.exit(0);
 }
@@ -82,7 +82,7 @@ runChecks({ clientId, tenantId }).then((results) => {
 	} else {
 		console.log("All checks passed.\n");
 	}
-}).catch((err) => {
+}).catch((err: unknown) => {
 	console.error("Unexpected error:", err);
 	process.exit(1);
 });

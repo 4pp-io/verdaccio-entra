@@ -37,6 +37,13 @@ export default tseslint.config(
 			}],
 		},
 	},
+	// --- CLI entry point: console is expected ---
+	{
+		files: ["src/cli.ts"],
+		rules: {
+			"no-console": "off",
+		},
+	},
 	// --- Test files: relax casting rules (mocks need it) ---
 	{
 		files: ["src/__tests__/**/*.ts"],

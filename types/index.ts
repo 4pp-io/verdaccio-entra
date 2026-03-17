@@ -16,8 +16,10 @@ export interface EntraConfig {
 	tenantId: string;
 	/**
 	 * Maximum token size in bytes before rejecting without parsing.
-	 * Entra tokens with many group claims can reach 16-20KB.
-	 * Default: 16384 (16KB).
+	 * Entra tokens with many group claims can reach 16-20KB, but the
+	 * Microsoft.IdentityModel default is 256KB.
+	 * Default: 256000 (256KB).
+	 * @see https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultmaximumtokensizeinbytes
 	 */
 	maxTokenBytes?: number;
 	/**
@@ -40,6 +42,26 @@ export interface EntraConfig {
 	 * Can also be set via ENTRA_AUDIENCE env var.
 	 */
 	audience?: string;
+	/**
+	 * Kill the Verdaccio process if the plugin fails to initialize.
+	 * Default: false (plugin is skipped, Verdaccio falls back to other auth plugins).
+	 *
+	 * Set to true in production when this is your only auth plugin.
+	 * Verdaccio's plugin loader silently skips failed plugins and falls
+	 * back to htpasswd — without failClosed, a config typo means your
+	 * registry boots with no Entra auth.
+	 */
+	failClosed?: boolean;
+	/**
+	 * Allow authentication when Entra group overage occurs (>200 groups).
+	 * Default: false (authentication is rejected with a clear error).
+	 *
+	 * When a user belongs to >200 groups, Entra omits the groups claim
+	 * entirely. With this set to false, the plugin rejects authentication
+	 * to prevent silent authorization failures. Set to true only if you
+	 * do not use group-based package ACLs.
+	 */
+	allowGroupOverage?: boolean;
 }
 
 /** Claims used by the plugin from a validated Entra ID access token. */

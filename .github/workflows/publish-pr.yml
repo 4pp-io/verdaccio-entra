@@ -16,7 +16,7 @@ jobs:
       contents: read # to checkout the pull request
       issues: write # to post comments and reactions
       pull-requests: write # to post reactions on PR comments
-      packages: write # to publish packages
+      id-token: write # npm provenance via OIDC
     steps:
       - name: Report in-progress reaction
         id: report_in_progress
@@ -38,6 +38,17 @@ jobs:
           fi
         env:
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+
+      - name: Verify CI passed on PR (SDL V-12)
+        run: |
+          FAILED=$(gh pr checks ${{ github.event.issue.number }} --json name,state \
+            --jq '[.[] | select(.name == "build-and-test" or .name == "secret-scanning") | select(.state != "SUCCESS")] | length')
+          if [[ "$FAILED" != "0" ]]; then
+            echo "::error::Required status checks have not passed. Cannot publish snapshot until CI is green."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/checkout@v6
 
@@ -77,23 +88,20 @@ jobs:
 
           echo "publish_tag=$PUBLISH_TAG" >> "$GITHUB_OUTPUT"
           echo "snapshot_tag=$SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
-          echo "version=0.0.0-$SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
 
-      - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}" --snapshot-prerelease-template "{tag}"
+      - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm run build
 
       - name: Publish snapshot versions
-        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}" --no-git-tag --provenance
 
       - name: Post comment with published version
         run: |
           cat <<'BODY' > /tmp/comment-body.md
-          Published snapshot version `${{ steps.snapshot_version.outputs.version }}` in response to [this comment](${{ github.event.comment.html_url }}).
+          Published snapshot `${{ steps.snapshot_version.outputs.snapshot_tag }}` in response to [this comment](${{ github.event.comment.html_url }}). Install with `npm i @4pp-io/verdaccio-entra@${{ steps.snapshot_version.outputs.publish_tag }}`
           BODY
           gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/comment-body.md
         env:
