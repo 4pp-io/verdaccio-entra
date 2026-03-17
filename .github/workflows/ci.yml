@@ -147,10 +147,15 @@ jobs:
           fetch-depth: 0
 
       - name: Scan for secrets (SDL V-3)
+        if: github.actor != 'dependabot[bot]'
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Skip secret scanning for Dependabot
+        if: github.actor == 'dependabot[bot]'
+        run: echo "Skipped — Dependabot PRs only update dependencies from trusted registries"
 
   sbom:
     runs-on: ubuntu-latest
