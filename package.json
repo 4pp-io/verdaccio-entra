@@ -75,7 +75,7 @@
 		"test:e2e:debug": "cross-env DEBUG='testcontainers*' vitest run src/__tests__/e2e.test.ts",
 		"test:coverage": "vitest run --coverage --exclude src/__tests__/e2e.test.ts",
 		"test:watch": "vitest",
-		"check-config": "node lib/src/cli.js",
+		"check-config": "npm run build && node lib/src/cli.js",
 		"changeset": "changeset",
 		"version-packages": "changeset version && npm install",
 		"release": "npm run build && changeset publish --provenance"

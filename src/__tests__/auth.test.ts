@@ -223,7 +223,16 @@ describe("authenticate", () => {
 	});
 
 	it("returns false for expired token", async () => {
-		const token = await signToken(entraV2Claims(), { expiresIn: "-1s" });
+		// Needs to be >5 minutes expired due to clockTolerance
+		const token = await signToken(entraV2Claims(), { expiresIn: "-6m" });
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
+	});
+
+	it("returns false for token that is not yet valid (nbf in the future)", async () => {
+		// Needs to be >5 minutes in the future due to clockTolerance
+		const nbfInFuture = Math.floor(Date.now() / 1000) + 360; // 6 minutes from now
+		const token = await signToken(entraV2Claims({ nbf: nbfInFuture }));
 		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);
 	});
@@ -344,16 +353,13 @@ describe("authenticate", () => {
 		expect(groups).toContain("a0b1c2d3-e4f5-6789-0abc-def123456789");
 	});
 
-	it("handles hasgroups=true with overage (no groups array, just the flag)", async () => {
-		// When hasgroups is true and groups is absent, it means overage —
-		// similar to _claim_names but the older format
+	it("rejects hasgroups=true with overage by default (no groups array, just the flag)", async () => {
 		const token = await signToken(entraV2Claims({
 			groups: undefined,
 			hasgroups: true,
 		}));
-		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
-		expect(groups).toContain("$authenticated");
-		expect(groups).toContain("registry-admin"); // roles still present
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
 	});
 
 	it("handles app-only token (client_credentials flow — no user claims)", async () => {

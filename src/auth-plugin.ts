@@ -13,8 +13,11 @@ const debug = debugCore("verdaccio:plugin:entra");
 
 /** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Default max token size. Entra tokens with many groups can reach 16-20KB. */
-export const DEFAULT_MAX_TOKEN_BYTES = 16_384;
+/** 
+ * Default max token size. Set to 256KB to align with Microsoft.IdentityModel default 
+ * (TokenValidationParameters.DefaultMaximumTokenSizeInBytes).
+ */
+export const DEFAULT_MAX_TOKEN_BYTES = 256_000;
 export const AUDIENCE_PREFIX = "api://";
 
 /**
@@ -260,6 +263,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				algorithms: ["RS256"],
 				issuer: this._issuer,
 				audience: this._audience,
+				clockTolerance: 300, // 5 minutes clock skew tolerance
 			});
 			return payload as EntraTokenPayload;
 		} catch (err) {
@@ -280,12 +284,16 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		// This plugin is AuthN-only and cannot call Graph.
 		// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
 		const claimNames = payload["_claim_names"];
-		if (
+		const hasClaimNamesGroupOverage =
 			claimNames &&
 			typeof claimNames === "object" &&
 			!Array.isArray(claimNames) &&
-			"groups" in (claimNames as Record<string, unknown>)
-		) {
+			"groups" in (claimNames as Record<string, unknown>);
+		
+		const hasLegacyGroupOverage =
+			payload["hasgroups"] === true && payload["groups"] === undefined;
+
+		if (hasClaimNamesGroupOverage || hasLegacyGroupOverage) {
 			const user = payload["preferred_username"] ?? payload["upn"] ?? "unknown";
 			this._logger.error(
 				{ user },

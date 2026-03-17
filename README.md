@@ -147,7 +147,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
 ## Security Considerations
 
-- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin throws from its constructor and Verdaccio skips it (falling back to other auth plugins like htpasswd). Set `failClosed: true` in config to kill the process instead — use this in production when Entra is your only auth plugin.
+- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin throws from its constructor and Verdaccio skips it (falling back to other auth plugins like htpasswd). Set `failClosed: true` in config (or `ENTRA_FAIL_CLOSED=true` in the environment) to kill the process instead — use this in production when Entra is your only auth plugin. For large tenants where Entra may emit a groups overage error and omit group membership, you can relax this behavior by setting `allowGroupOverage: true` (or `ENTRA_ALLOW_GROUP_OVERAGE=true`) so that authentication can still proceed even if all group memberships cannot be resolved.
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - `security.api.jwt.sign.expiresIn` controls Verdaccio token lifetime (default: 7d in Docker config)
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)

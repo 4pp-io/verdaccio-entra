@@ -1,8 +1,8 @@
 /**
- * Config validation logic — pure functions, no side effects.
+ * Config validation logic — no console.log or process.exit; performs network I/O via fetch.
  *
  * Used by:
- *   - scripts/check-config.ts (CLI wrapper)
+ *   - src/cli.ts (CLI wrapper)
  *   - src/__tests__/check-config.test.ts (unit tests, no subprocess needed)
  */
 
@@ -22,13 +22,15 @@ export async function verifyJwksEndpoint(authority: string, tenantId: string): P
 		);
 	}
 	const data = (await res.json()) as unknown;
-	if (
-		!data ||
-		typeof data !== "object" ||
-		!Array.isArray((data as Record<string, unknown>).keys)
-	) {
+	if (!data || typeof data !== "object") {
 		throw new Error(
-			`JWKS endpoint returned invalid data: expected an object with a 'keys' array from ${url}.`,
+			`JWKS endpoint returned invalid data: expected an object with a non-empty 'keys' array from ${url}.`,
+		);
+	}
+	const keys = (data as Record<string, unknown>).keys;
+	if (!Array.isArray(keys) || keys.length === 0 || keys.some((k) => !k || typeof k !== "object")) {
+		throw new Error(
+			`JWKS endpoint returned invalid data: expected an object with a non-empty 'keys' array of key objects from ${url}.`,
 		);
 	}
 	return true;
