@@ -39,7 +39,7 @@ Each item maps to a specific SDL requirement ID.
 
 ## Authentication Security
 - [ ] `clientId` and `tenantId` validated as GUIDs at startup
-- [ ] Token size bounded (16KB default, configurable via maxTokenBytes) before parsing
+- [ ] Token size bounded (256KB default, configurable via maxTokenBytes) before parsing
 - [ ] Expired tokens are rejected
 - [ ] Unknown/missing `kid` headers are rejected
 

@@ -45,7 +45,7 @@ Entra ID (IdP)          Plugin (JWT validation)         Verdaccio (authz)
 
 ### Denial of Service — Severity: Medium
 - **Threat**: Oversized token payloads; JWKS endpoint flooding
-- **Mitigation**: 16KB token size guard (configurable via maxTokenBytes); JWKS client caches keys for 10 minutes
+- **Mitigation**: 256KB token size guard (configurable via maxTokenBytes); JWKS client caches keys for 10 minutes
 - **Residual risk**: Medium — JWKS endpoint unavailability blocks new logins (existing Verdaccio JWTs continue to work); rate limiting is the reverse proxy's responsibility
 
 ### Elevation of Privilege — Severity: High
@@ -59,7 +59,7 @@ Entra ID (IdP)          Plugin (JWT validation)         Verdaccio (authz)
 |-------|-----------|
 | `clientId` config | Must be valid GUID |
 | `tenantId` config | Must be valid GUID |
-| JWT password field | Max 16384 bytes (configurable), must decode as JWT, must have `kid` header |
+| JWT password field | Max 256000 bytes (configurable), must decode as JWT, must have `kid` header |
 | JWT signature | RS256 only, verified against JWKS endpoint |
 | JWT claims | Issuer must match tenant, audience must match `api://{clientId}` |
 
@@ -69,7 +69,7 @@ The auth plugin interface (`pluginUtils.Auth<T>`) is stable across Verdaccio v6,
 However, v6+ changed the legacy token signature from `crypto.createDecipher` (deprecated) to
 `crypto.createCipheriv`. This means:
 
-- The `secret` in config.yaml **must be at least 32 characters** (used as AES-256 key)
+- The `secret` in config.yaml **must be at least 32 characters** (used as AES-256 key for `crypto.createCipheriv` which requires a 32-byte key: https://nodejs.org/api/crypto.html#cryptocreatecipherivalgorithm-key-iv-options)
 - All tokens from Verdaccio v5 and earlier are invalidated on upgrade to v6
 - The plugin config type should NOT extend Verdaccio's `Config` — the plugin loader passes
   only the per-plugin subtree (e.g., `{ clientId, tenantId }`), not the full config

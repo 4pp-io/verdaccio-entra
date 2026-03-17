@@ -16,6 +16,7 @@ export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 /** 
  * Default max token size. Set to 256KB to align with Microsoft.IdentityModel default 
  * (TokenValidationParameters.DefaultMaximumTokenSizeInBytes).
+ * @see https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultmaximumtokensizeinbytes
  */
 export const DEFAULT_MAX_TOKEN_BYTES = 256_000;
 export const AUDIENCE_PREFIX = "api://";
@@ -260,10 +261,13 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
 		try {
 			const { payload } = await jwtVerify(token, this._jwks, {
+				// Entra ID always signs access tokens using RS256
+				// @see https://learn.microsoft.com/entra/identity-platform/access-tokens#validate-tokens
 				algorithms: ["RS256"],
 				issuer: this._issuer,
 				audience: this._audience,
-				clockTolerance: 300, // 5 minutes clock skew tolerance
+				clockTolerance: 300, // 5 minutes clock skew tolerance (aligns with Microsoft.IdentityModel.Tokens.TokenValidationParameters.DefaultClockSkew)
+				// @see https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultclockskew
 			});
 			return payload as EntraTokenPayload;
 		} catch (err) {

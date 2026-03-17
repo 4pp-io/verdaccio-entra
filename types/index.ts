@@ -16,8 +16,10 @@ export interface EntraConfig {
 	tenantId: string;
 	/**
 	 * Maximum token size in bytes before rejecting without parsing.
-	 * Entra tokens with many group claims can reach 16-20KB.
-	 * Default: 16384 (16KB).
+	 * Entra tokens with many group claims can reach 16-20KB, but the
+	 * Microsoft.IdentityModel default is 256KB.
+	 * Default: 256000 (256KB).
+	 * @see https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultmaximumtokensizeinbytes
 	 */
 	maxTokenBytes?: number;
 	/**

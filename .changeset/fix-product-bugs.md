@@ -10,6 +10,14 @@ When a user belongs to >200 Entra groups, Entra omits the `groups` claim entirel
 
 Invalid configuration now throws by default, letting Verdaccio skip the plugin and fall back to other auth plugins (e.g. htpasswd). Set `failClosed: true` to call `process.exit(1)` instead — use this in production when Entra is your only auth plugin. Supports `ENTRA_FAIL_CLOSED` env var override.
 
+### Token size limit documentation fixed
+
+Aligned `docs/threat-model.md` and JSDoc with the actual implementation limit of `256000` (256KB), which correctly matches Microsoft's `TokenValidationParameters.DefaultMaximumTokenSizeInBytes`. 
+
+### First-party Microsoft citations added
+
+Added explicit links to official Microsoft and Node.js documentation backing the specific values used for default token size, 5-minute clock skew tolerance, AES-256 secret key lengths, and the RS256 token signature algorithm.
+
 ### CLI distribution fix
 
 The `check-config` CLI is now compiled and distributed via `bin` field. Run `npx verdaccio-entra-check` instead of `npm run check-config` (which required `tsx` and source files not included in the package).

@@ -4,7 +4,7 @@
 
 If the Verdaccio JWT signing secret is compromised, all issued tokens must be invalidated.
 
-1. Generate a new secret (**must be at least 32 characters** — used as AES-256 key for `createCipheriv`)
+1. Generate a new secret (**must be at least 32 characters** — used as AES-256 key for `createCipheriv`, see https://nodejs.org/api/crypto.html#cryptocreatecipherivalgorithm-key-iv-options)
 2. Update `config.yaml` (or the `VERDACCIO_SECRET` env var)
 3. Restart the Verdaccio container
 4. All existing client tokens become invalid — users must run `npm login` again

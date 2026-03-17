@@ -48,7 +48,7 @@ the plugin codebase itself. No code-level artifact can satisfy this requirement.
 | R-4 | Data classification performed | PASS | `docs/threat-model.md` § Asset Inventory — 4 assets classified High/Medium |
 | R-5 | Acceptable risk levels defined | PASS | `docs/threat-model.md` § Residual Risks — 5 residual risks documented with severity |
 | R-6 | Identity model defined | PASS | `src/auth-plugin.ts` docblock lines 23–51: Entra ID -> JWKS -> Verdaccio JWT flow |
-| R-7 | Non-functional security requirements | PASS | Token lifetime (7d), size guard (8KB), JWKS cache TTL (10m), non-root container |
+| R-7 | Non-functional security requirements | PASS | Token lifetime (7d), size guard (256KB), JWKS cache TTL (10m), non-root container |
 | R-8 | Requirements updated through lifecycle | PASS | Checklist and threat model are version-controlled alongside code |
 | R-9 | Acceptable security levels defined at project start | PASS | `docs/threat-model.md` — severity ratings on all STRIDE threats |
 | R-10 | Risk acceptance documented | PASS | `docs/threat-model.md` § Residual Risks — 5 accepted risks with rationale |
@@ -126,7 +126,7 @@ no persistent sessions, and no privilege escalation path.
 
 | # | Requirement | Status | Evidence |
 |---|------------|--------|----------|
-| I-1 | Input validation (allowlist) | PASS | `assertGuid()` allowlist regex for config; `MAX_TOKEN_BYTES` size guard; `jwt.decode()` structure validation; `kid` header check |
+| I-1 | Input validation (allowlist) | PASS | `assertGuid()` allowlist regex for config; `maxTokenBytes` size guard; `jwt.decode()` structure validation; `kid` header check |
 | I-2 | Output encoding (XSS prevention) | N/A | Plugin has no HTML output; Verdaccio handles web UI |
 | I-3 | Parameterized queries | N/A | No database access |
 | I-4 | Suppress server headers | N/A | Reverse proxy / Verdaccio responsibility |
