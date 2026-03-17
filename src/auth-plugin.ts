@@ -135,11 +135,25 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
-		const resolved = resolveConfig(config);
+		this._logger = appOptions.logger;
+
+		let resolved: ReturnType<typeof resolveConfig>;
+		try {
+			resolved = resolveConfig(config);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._logger.error(
+				{},
+				"FATAL: verdaccio-entra failed to initialize — Verdaccio will continue WITHOUT authentication. " +
+					"All packages may be publicly accessible. Fix the configuration and restart. " +
+					"Error: " + msg,
+			);
+			throw err;
+		}
+
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
 		this._audience = resolved.audience;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
-		this._logger = appOptions.logger;
 
 		// Issuer and JWKS URI are deterministic for Entra v2 endpoints.
 		// jose handles all JWKS key fetching, caching, rotation, and retries.
