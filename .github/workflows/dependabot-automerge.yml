@@ -23,9 +23,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           PR=$(gh pr list \
-            --repo "${{ github.repository }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --head "$HEAD_BRANCH" \
             --json url,number --jq '.[0]')
           if [ -z "$PR" ] || [ "$PR" = "null" ]; then

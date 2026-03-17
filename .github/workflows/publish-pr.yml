@@ -23,10 +23,12 @@ jobs:
       - name: Report in-progress reaction
         id: report_in_progress
         run: |
-          REACTION_ID=$(gh api /repos/${{github.repository}}/issues/comments/${{github.event.comment.id}}/reactions -f content='eyes' --jq '.id')
+          REACTION_ID=$(gh api "/repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content='eyes' --jq '.id')
           echo "in_progress_reaction_id=$REACTION_ID" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
 
       - name: Check if user is authorized to publish
         id: check_authorization
@@ -43,7 +45,7 @@ jobs:
 
       - name: Verify CI passed on PR (SDL V-12)
         run: |
-          FAILED=$(gh pr checks ${{ github.event.issue.number }} --json name,state \
+          FAILED=$(gh pr checks "$PR_NUMBER" --json name,state \
             --jq '[.[] | select(.name == "build-and-test" or .name == "secret-scanning") | select(.state != "SUCCESS")] | length')
           if [[ "$FAILED" != "0" ]]; then
             echo "::error::Required status checks have not passed. Cannot publish snapshot until CI is green."
@@ -51,6 +53,7 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -89,11 +92,13 @@ jobs:
       - name: Compute snapshot version
         id: snapshot_version
         run: |
-          PUBLISH_TAG="pr${{ github.event.issue.number }}"
+          PUBLISH_TAG="pr$PR_NUMBER"
           SNAPSHOT_TAG="${PUBLISH_TAG}.$(git rev-parse --short HEAD)"
 
           echo "publish_tag=$PUBLISH_TAG" >> "$GITHUB_OUTPUT"
           echo "snapshot_tag=$SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}"
         env:
@@ -107,37 +112,50 @@ jobs:
       - name: Post comment with published version
         run: |
           cat <<'BODY' > /tmp/comment-body.md
-          Published snapshot `${{ steps.snapshot_version.outputs.snapshot_tag }}` in response to [this comment](${{ github.event.comment.html_url }}). Install with `npm i @4pp-io/verdaccio-entra@${{ steps.snapshot_version.outputs.publish_tag }}`
+          Published snapshot `${SNAPSHOT_TAG}` in response to [this comment](${COMMENT_URL}). Install with `npm i @4pp-io/verdaccio-entra@${PUBLISH_TAG}`
           BODY
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
+          SNAPSHOT_TAG: ${{ steps.snapshot_version.outputs.snapshot_tag }}
+          PUBLISH_TAG: ${{ steps.snapshot_version.outputs.publish_tag }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
 
       - name: Post failure comment
         if: failure()
         run: |
-          FAILED_JOB_ID=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --jq ".jobs[] | select(.name == \"$GITHUB_JOB\") | .id")
-          LINK="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${FAILED_JOB_ID}"
+          FAILED_JOB_ID=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" --jq ".jobs[] | select(.name == \"$GITHUB_JOB\") | .id")
+          LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
 
           cat <<BODY > /tmp/comment-body.md
-          Snapshot publish triggered by [this comment](${{ github.event.comment.html_url }}) failed. [See the failed job](${LINK}).
+          Snapshot publish triggered by [this comment](${COMMENT_URL}) failed. [See the failed job](${LINK}).
           BODY
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
 
       - name: Add result reaction
         if: always() && steps.report_in_progress.outcome == 'success'
         run: |
-          gh api /repos/${{github.repository}}/issues/comments/${{github.event.comment.id}}/reactions \
-            -f content="${{ job.status == 'success' && 'rocket' || '-1' }}"
+          gh api "/repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" \
+            -f content="$REACTION"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ job.status == 'success' && 'rocket' || '-1' }}
 
       - name: Remove in-progress reaction
         if: always() && steps.report_in_progress.outcome == 'success'
-        run: gh api -X DELETE /repos/${{github.repository}}/issues/comments/${{github.event.comment.id}}/reactions/${{steps.report_in_progress.outputs.in_progress_reaction_id}}
+        run: gh api -X DELETE "/repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions/$REACTION_ID"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION_ID: ${{ steps.report_in_progress.outputs.in_progress_reaction_id }}
