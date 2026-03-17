@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
 import { TEST_TENANT, TEST_CLIENT, TEST_KID } from "./fixtures";
-import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS, resolveConfig } from "../auth-plugin";
+import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS, resolveConfig, warnIfProxyMisconfigured } from "../auth-plugin";
 
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
@@ -172,11 +172,35 @@ describe("resolveConfig", () => {
 	});
 });
 
+describe("warnIfProxyMisconfigured", () => {
+	it("warns when HTTPS_PROXY is set without NODE_USE_ENV_PROXY", () => {
+		const error = vi.fn();
+		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		warnIfProxyMisconfigured(logger, { HTTPS_PROXY: "http://proxy:8080" });
+		expect(error).toHaveBeenCalledOnce();
+		expect(error.mock.calls[0][1]).toMatch(/NODE_USE_ENV_PROXY/);
+	});
+
+	it("does not warn when NODE_USE_ENV_PROXY is set", () => {
+		const error = vi.fn();
+		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		warnIfProxyMisconfigured(logger, { HTTPS_PROXY: "http://proxy:8080", NODE_USE_ENV_PROXY: "1" });
+		expect(error).not.toHaveBeenCalled();
+	});
+
+	it("does not warn when no proxy vars are set", () => {
+		const error = vi.fn();
+		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		warnIfProxyMisconfigured(logger, {});
+		expect(error).not.toHaveBeenCalled();
+	});
+});
+
 describe("OIDC discovery failure", () => {
 	it("rejects auth when discovery fails", async () => {
 		mockFetch.mockResolvedValue({ ok: false, status: 400 });
 		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
 
 		const token = await signToken(validClaims());
 		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
@@ -187,7 +211,7 @@ describe("OIDC discovery failure", () => {
 	it("concurrent auth requests share a single retry (no thundering herd)", async () => {
 		mockFetch.mockResolvedValue({ ok: false, status: 503 });
 		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
 
 		// Discovery has failed; now restore fetch and fire concurrent requests
 		let fetchCount = 0;
@@ -228,7 +252,7 @@ describe("OIDC discovery failure", () => {
 	it("recovers after discovery failure — success resets state", async () => {
 		mockFetch.mockResolvedValue({ ok: false, status: 503 });
 		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
 
 		// First auth fails (discovery still down)
 		const token = await signToken(validClaims());
@@ -252,7 +276,7 @@ describe("authenticate", () => {
 	beforeEach(async () => {
 		setFetchSuccess();
 		plugin = createPlugin();
-		await (plugin as unknown as Record<string, Promise<void>>)["_ready"];
+		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
 	});
 
 	it("succeeds when username matches token identity", async () => {

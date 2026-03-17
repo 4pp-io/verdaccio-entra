@@ -77,8 +77,35 @@ export interface OidcDiscovery {
 }
 
 /**
+ * Warn if proxy env vars are set but Node won't use them.
+ *
+ * Node's native fetch ignores HTTP_PROXY/HTTPS_PROXY unless
+ * NODE_USE_ENV_PROXY=1 is set (stable since Node v21.7.0/v20.13.0).
+ * jose's createRemoteJWKSet also uses fetch internally, so both
+ * OIDC discovery and JWKS fetching are affected.
+ *
+ * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
+ */
+export function warnIfProxyMisconfigured(
+	logger: Logger,
+	env: Record<string, string | undefined> = process.env,
+): void {
+	const hasProxy = env["HTTPS_PROXY"] || env["HTTP_PROXY"] || env["https_proxy"] || env["http_proxy"];
+	const hasFlag = env["NODE_USE_ENV_PROXY"];
+	if (hasProxy && !hasFlag) {
+		logger.error(
+			{},
+			"HTTPS_PROXY or HTTP_PROXY is set but NODE_USE_ENV_PROXY is not. " +
+				"Node's native fetch (used for OIDC discovery and JWKS fetching) will IGNORE your proxy. " +
+				"Set NODE_USE_ENV_PROXY=1 in your container/environment to enable proxy support. " +
+				"See https://nodejs.org/en/learn/http/enterprise-network-configuration",
+		);
+	}
+}
+
+/**
  * Fetch OIDC discovery document.
- * Proxy support via NODE_USE_ENV_PROXY=1 (Node 22.21+).
+ * Proxy support via NODE_USE_ENV_PROXY=1 (Node 20.13+/21.7+).
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 export async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
@@ -114,9 +141,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _entraConfig: EntraConfig;
 	private _audience: string;
 	private _maxTokenBytes: number;
-	private _ready: Promise<void>;
-	private _discoveryFailed = false;
-	private _retryInflight = false;
+	/** Shared discovery promise. Null when failed — next auth attempt creates a fresh one. */
+	private _discovery: Promise<void> | null;
 	private _discoveryRetries: number;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
@@ -128,7 +154,8 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		this._discoveryRetries = config.discoveryRetries ?? 3;
 		this._logger = appOptions.logger;
 
-		this._ready = this._initWithRetry(resolved.authority, resolved.tenantId, this._discoveryRetries);
+		warnIfProxyMisconfigured(this._logger);
+		this._discovery = this._discover();
 
 		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", resolved.tenantId, resolved.authority, this._audience);
 	}
@@ -187,45 +214,52 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	// --- Internals ---
 
 	/**
-	 * Initialize OIDC discovery with retry on failure.
-	 * Only the initial OIDC discovery fetch is retried here.
-	 * JWKS key fetching/caching/rotation is handled entirely by jose's
-	 * createRemoteJWKSet (with built-in cooldown and cache-miss refetch).
+	 * Run OIDC discovery with exponential backoff retry.
+	 * On success, sets _issuer and _jwks. On failure, nullifies _discovery
+	 * so the next auth attempt creates a fresh promise (no thundering herd —
+	 * concurrent callers share the same promise until it settles).
+	 *
+	 * jose's createRemoteJWKSet handles JWKS caching, key rotation,
+	 * rate limiting, and kid matching automatically after this.
 	 */
-	private async _initWithRetry(authority: string, tenantId: string, maxRetries = 3): Promise<void> {
-		for (let attempt = 1; attempt <= maxRetries; attempt++) {
-			try {
-				const discovery = await discoverOidc(authority, tenantId);
-				this._issuer = discovery.issuer;
-				// jose handles JWKS caching, key rotation, rate limiting (cooldownDuration),
-				// and kid matching automatically. No manual state management needed.
-				this._jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
-				this._discoveryFailed = false;
-				this._logger.info(
-					{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
-					"OIDC discovery succeeded — issuer: @{issuer}",
-				);
-				debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
-				return;
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				this._logger.error(
-					{ err: msg, attempt, maxRetries },
-					"OIDC discovery failed (attempt @{attempt}/@{maxRetries}): @{err}",
-				);
-				debug("OIDC discovery attempt %d/%d failed: %s", attempt, maxRetries, msg);
-				if (attempt < maxRetries) {
-					const delay = 1000 * Math.pow(2, attempt - 1);
-					await new Promise((r) => setTimeout(r, delay));
+	private _discover(): Promise<void> {
+		const { authority = DEFAULT_AUTHORITY, tenantId } = this._entraConfig;
+		const maxRetries = this._discoveryRetries;
+
+		const attempt = async (): Promise<void> => {
+			for (let i = 1; i <= maxRetries; i++) {
+				try {
+					const discovery = await discoverOidc(authority, tenantId);
+					this._issuer = discovery.issuer;
+					this._jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
+					this._logger.info(
+						{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
+						"OIDC discovery succeeded — issuer: @{issuer}",
+					);
+					debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
+					return;
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					this._logger.error(
+						{ err: msg, attempt: i, maxRetries },
+						"OIDC discovery failed (attempt @{attempt}/@{maxRetries}): @{err}",
+					);
+					debug("OIDC discovery attempt %d/%d failed: %s", i, maxRetries, msg);
+					if (i < maxRetries) {
+						await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i - 1)));
+					}
 				}
 			}
-		}
-		this._discoveryFailed = true;
-		this._logger.error(
-			{ authority, tenantId },
-			"OIDC discovery failed after all retries — will retry on next auth attempt. " +
-				"Check authority (@{authority}) and tenantId (@{tenantId}).",
-		);
+			// All retries exhausted — null out so next auth attempt retries
+			this._discovery = null;
+			this._logger.error(
+				{ authority, tenantId },
+				"OIDC discovery failed after all retries — will retry on next auth attempt. " +
+					"Check authority (@{authority}) and tenantId (@{tenantId}).",
+			);
+		};
+
+		return attempt();
 	}
 
 	/**
@@ -236,14 +270,13 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * createRemoteJWKSet handles JWKS fetching, caching, and key rotation.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
-		if (this._discoveryFailed && !this._retryInflight) {
-			const { authority, tenantId } = this._entraConfig;
-			this._retryInflight = true;
-			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId, this._discoveryRetries)
-				.finally(() => { this._retryInflight = false; });
+		// Lazy re-discovery: if previous attempt failed (_discovery is null),
+		// create a fresh promise. Concurrent callers share the same promise.
+		if (!this._discovery) {
+			this._discovery = this._discover();
 		}
 
-		await this._ready;
+		await this._discovery;
 		if (!this._jwks || !this._issuer) {
 			throw new DiscoveryError(
 				"Plugin not ready — OIDC discovery has not completed. " +

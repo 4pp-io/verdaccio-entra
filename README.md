@@ -152,12 +152,12 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)
 - **Username Mutability Risk:** Verdaccio derives package ownership from the username entered during `npm login`, and this plugin validates it against the token's `preferred_username`, `upn`, or `email` claim. **Microsoft Entra ID considers these claims mutable.** If a user's UPN changes (e.g., due to marriage or a legal name change), they will `npm login` with their new name and it will succeed. However, any previously published packages will still display their old username in the metadata. This is a cosmetic artifact of Verdaccio's architecture, not a security vulnerability. Access control remains secure because package access is governed by immutable group claims (`$authenticated` and Entra ID groups/roles), not by string-matching the author's username.
 - Username must match Entra identity — prevents audit log spoofing via `npm login`
-- Group-based access control requires your Entra app registration to emit `groups` or `roles` claims
+- **Prefer App Roles over Groups:** Entra ID `groups` claims contain opaque GUIDs (Object IDs), making `config.yaml` unreadable. [App Roles](https://learn.microsoft.com/entra/identity-platform/howto-add-app-roles-in-apps) emit human-readable strings in the `roles` claim (e.g., `Package.Publisher`). Microsoft [recommends App Roles](https://learn.microsoft.com/security/zero-trust/develop/configure-tokens-group-claims-app-roles#groups-and-app-roles) over groups for application authorization. Both are supported — the plugin merges `groups` and `roles` into the array returned to Verdaccio
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection
 - Token payloads exceeding 16KB (configurable via `maxTokenBytes`) are rejected before JWT parsing
 - JWKS key fetching is rate-limited (10 req/min) to prevent kid-spoofing DoS
 - Rotating the Verdaccio `secret` invalidates all existing client tokens (forces re-login)
-- For corporate proxy environments, set `NODE_USE_ENV_PROXY=1`
+- **Corporate proxy:** Node's native `fetch` (used for OIDC discovery) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
 
 ## License
 
