@@ -13,9 +13,9 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -31,8 +31,33 @@ jobs:
       - name: Test with coverage (95/90/95 thresholds)
         run: npm run test:coverage
 
+      - name: Cache Docker images for E2E
+        uses: actions/cache@v5
+        with:
+          path: /tmp/docker-images
+          key: docker-images-${{ runner.os }}-${{ hashFiles('Dockerfile', 'scripts/mock-jwks.Dockerfile', 'scripts/mock-jwks-server.mjs', 'docker/config.yaml') }}
+          restore-keys: |
+            docker-images-${{ runner.os }}-
+
+      - name: Load cached Docker images
+        run: |
+          if [ -d /tmp/docker-images ]; then
+            for img in /tmp/docker-images/*.tar; do
+              docker load -i "$img" 2>/dev/null || true
+            done
+          fi
+
       - name: E2E Integration Tests (Testcontainers)
         run: npm run test:e2e
+
+      - name: Save Docker images for cache
+        if: always()
+        run: |
+          mkdir -p /tmp/docker-images
+          docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>' | while read img; do
+            filename=$(echo "$img" | tr '/:' '_')
+            docker save -o "/tmp/docker-images/${filename}.tar" "$img" 2>/dev/null || true
+          done
 
       - name: Security audit (production deps only)
         run: npm audit --audit-level=high --omit=dev
@@ -40,7 +65,7 @@ jobs:
   secret-scanning:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -55,9 +80,9 @@ jobs:
     needs: build-and-test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
