@@ -85,7 +85,10 @@
     "changeset": "changeset",
     "version-packages": "changeset version && npm install && npm run format",
     "release": "npm run build && changeset publish --provenance",
-    "test:workflows": "act pull_request -e .github/act-event.json --container-architecture linux/amd64 -s GITHUB_TOKEN=$(gh auth token)",
-    "test:workflows:all": "act -e .github/act-event.json --container-architecture linux/amd64 -s GITHUB_TOKEN=$(gh auth token)"
+    "test:workflows": "npm run test:workflows:pr",
+    "test:workflows:pr": "act pull_request -e .github/act/pull_request.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
+    "test:workflows:push": "act push -e .github/act/push.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
+    "test:workflows:comment": "act issue_comment -e .github/act/issue_comment.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
+    "test:workflows:all": "npm run test:workflows:pr && npm run test:workflows:push && npm run test:workflows:comment"
   }
 }

@@ -18,10 +18,16 @@ We welcome questions, bug reports, and pull requests.
 You can test GitHub Actions workflows locally using [act](https://github.com/nektos/act).
 
 ```bash
-# Run workflows triggered by pull_request (default behavior)
+# Run pull_request workflows (standard PR check)
 npm run test:workflows
 
-# Run all workflows (including push, etc.)
+# Run push workflows (simulates a push to the PR branch)
+npm run test:workflows:push
+
+# Run issue_comment workflows (simulates /publish-pr command)
+npm run test:workflows:comment
+
+# Run all workflow types sequentially
 npm run test:workflows:all
 ```
 
