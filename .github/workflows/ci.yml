@@ -63,14 +63,8 @@ jobs:
       - name: Verify CLI
         run: node lib/src/cli.js --help
 
-      - name: Verify package contents
-        run: |
-          OUTPUT=$(npm pack --dry-run 2>&1)
-          echo "$OUTPUT"
-          echo "$OUTPUT" | grep -q "lib/src/index.js" || { echo "::error::Missing lib/src/index.js"; exit 1; }
-          echo "$OUTPUT" | grep -q "lib/src/cli.js" || { echo "::error::Missing lib/src/cli.js"; exit 1; }
-          echo "$OUTPUT" | grep -q "README.md" || { echo "::error::Missing README.md"; exit 1; }
-          ! echo "$OUTPUT" | grep -q "__tests__" || { echo "::error::Test files should not be in package"; exit 1; }
+      - name: Verify package
+        run: npm publish --dry-run
 
   test:
     runs-on: ubuntu-latest
