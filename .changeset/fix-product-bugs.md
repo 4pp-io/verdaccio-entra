@@ -10,9 +10,9 @@ When a user belongs to >200 Entra groups, Entra omits the `groups` claim entirel
 
 Invalid configuration now throws by default, letting Verdaccio skip the plugin and fall back to other auth plugins (e.g. htpasswd). Set `failClosed: true` to call `process.exit(1)` instead — use this in production when Entra is your only auth plugin. Supports `ENTRA_FAIL_CLOSED` env var override.
 
-### Token size limit documentation fixed
+### Token size limit increased
 
-Aligned `docs/threat-model.md` and JSDoc with the actual implementation limit of `256000` (256KB), which correctly matches Microsoft's `TokenValidationParameters.DefaultMaximumTokenSizeInBytes`. 
+Increased the default `maxTokenBytes` from `16384` (16KB) to `256000` (256KB) to match [Microsoft's `DefaultMaximumTokenSizeInBytes`](https://learn.microsoft.com/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters.defaultmaximumtokensizeinbytes). Aligned `docs/threat-model.md` and JSDoc with the new default.
 
 ### First-party Microsoft citations added
 

@@ -30,7 +30,9 @@ auth:
     tenantId: "your-tenant-id"   # or ENTRA_TENANT_ID env var
     # audience: "api://your-client-id"     # or ENTRA_AUDIENCE (default: api://{clientId})
     # authority: "https://login.microsoftonline.us"  # or ENTRA_AUTHORITY (default: public cloud)
-    # maxTokenBytes: 256000               # default: 256,000 bytes
+    # maxTokenBytes: 256000               # default: 256,000 bytes (matches Microsoft's DefaultMaximumTokenSizeInBytes)
+    # failClosed: true                    # or ENTRA_FAIL_CLOSED=true — kill process on config error (use when Entra is your only auth plugin)
+    # allowGroupOverage: false            # or ENTRA_ALLOW_GROUP_OVERAGE=true — allow auth when >200 groups causes overage (default: reject)
 
 # Use $authenticated on all packages — Verdaccio best practice for private registries
 # @see https://verdaccio.org/docs/best#strong-package-access-with-authenticated
@@ -74,10 +76,12 @@ All config values can be overridden via environment variables (takes precedence 
 | `ENTRA_TENANT_ID` | `tenantId` | — | Directory (tenant) ID |
 | `ENTRA_AUDIENCE` | `audience` | `api://{clientId}` | Expected token audience (override for custom App ID URIs) |
 | `ENTRA_AUTHORITY` | `authority` | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud)) |
+| `ENTRA_FAIL_CLOSED` | `failClosed` | `false` | Kill process on config error (`true` = `process.exit(1)`) |
+| `ENTRA_ALLOW_GROUP_OVERAGE` | `allowGroupOverage` | `false` | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
 
 ### Proxy Support
 
-For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node 22.21+ built-in that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both token fetching (`fetch`) and JWKS key fetching (`https.request`).
+For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node.js core feature ([stable since Node 20.13.0 / 21.7.0](https://nodejs.org/en/learn/http/enterprise-network-configuration)) that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both token fetching (`fetch`) and JWKS key fetching (`https.request`).
 
 ```bash
 docker run -p 4873:4873 \

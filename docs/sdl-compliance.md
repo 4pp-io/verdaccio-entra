@@ -96,11 +96,11 @@ methodology" — https://learn.microsoft.com/azure/security/develop/secure-desig
 | D-13 | MFA required | N/A | See justification below |
 | D-14 | Least privilege | PASS | Docker runs as UID 10001; group-based access control; deny-all default on `allow_access`/`allow_publish` |
 | D-15 | Just-in-time access | N/A | Not applicable to a stateless auth plugin |
-| D-16 | Approved libraries list | PASS | 3 production deps, all widely-used: `jsonwebtoken` (75M weekly downloads), `jwks-rsa` (5M), `debug` (200M) |
+| D-16 | Approved libraries list | PASS | 3 production deps, all widely-used: `jose` (Web Crypto, zero deps, maintained by panva), `@verdaccio/core`, `debug` |
 | D-17 | Third-party vendor security | PASS | All deps are open-source with public vulnerability disclosure; monitored via Dependabot |
 | D-18 | No secrets in source | PASS | Config uses `${ENV_VAR}` pattern; no hardcoded secrets, keys, or tokens in source |
 | D-19 | Security design patterns | PASS | Deny-all default, input allowlisting (GUID regex), fail-safe error handling |
-| D-20 | Test plans for security requirements | PASS | 32 tests covering all auth success/rejection paths; mapped in `docs/security-checklist.md` |
+| D-20 | Test plans for security requirements | PASS | 60+ tests covering all auth success/rejection paths; mapped in `docs/security-checklist.md` |
 
 **D-13 justification**: MFA enforcement is an Entra ID tenant policy, not a plugin
 responsibility. The plugin validates whatever token Entra ID issues — if the tenant requires
@@ -132,14 +132,14 @@ no persistent sessions, and no privilege escalation path.
 | I-4 | Suppress server headers | N/A | Reverse proxy / Verdaccio responsibility |
 | I-5 | Sensitive content not cached | N/A | No browser-facing content |
 | I-6 | No production data in dev/test | PASS | Tests use synthetic RSA keys and fake GUIDs |
-| I-7 | Error handling: fail safe, no secrets in errors | PASS | `_mapJwtError()` returns user-friendly messages; raw keys/secrets never in error output; `errorUtils.getUnauthorized()` wraps all auth failures |
+| I-7 | Error handling: fail safe, no secrets in errors | PASS | `enrichJoseError()` returns user-friendly messages; raw keys/secrets never in error output; `errorUtils.getUnauthorized()` wraps all auth failures |
 | I-8 | Logging: success/failed auth | PASS | `_logger.info` on auth success with UPN; `_logger.error` on failure with sanitized error message; no tokens logged |
 | I-9 | No hardcoded secrets/paths | PASS | No custom start script; config via `${ENV_VAR}`; no secrets in source; standard Verdaccio entrypoint |
 | I-10 | Deny-all default | PASS | `allow_access` defaults to `["$authenticated"]`; `allow_publish` defaults to `["$authenticated"]`; unauthenticated users are denied unless `$all` is explicit |
 | I-11 | Re-authentication for sensitive ops | N/A | See justification below |
 | I-12 | File upload validation | N/A | Plugin does not handle file uploads; Verdaccio core handles tarball uploads |
 | I-13 | Strong password policy | N/A | See justification below |
-| I-14 | Use established security libraries | PASS | `jsonwebtoken` (Auth0 maintained), `jwks-rsa` (Auth0 maintained) — not custom crypto |
+| I-14 | Use established security libraries | PASS | `jose` (Web Crypto, zero deps, maintained by panva) — not custom crypto |
 
 **I-2, I-4, I-5 justification**: This plugin runs server-side within Verdaccio's Express
 process. It has no HTML templates, no browser-facing responses, and no direct HTTP response
@@ -178,8 +178,8 @@ tokens — https://learn.microsoft.com/azure/security/develop/secure-develop
 | C-20 | No self-signed certificates | PASS | Microsoft's JWKS endpoint uses a publicly trusted certificate |
 | C-21 | Cryptographically secure RNG | N/A | Plugin does not generate random values |
 | C-22 | No Math.random() for security | PASS | No `Math.random()` in source |
-| C-28 | Platform crypto libraries | PASS | Uses Node.js `crypto` module via `jsonwebtoken` library |
-| C-29 | Generic crypto errors to callers | PASS | `_mapJwtError()` returns user-friendly messages; raw crypto errors logged server-side only |
+| C-28 | Platform crypto libraries | PASS | Uses Web Crypto API via `jose` library |
+| C-29 | Generic crypto errors to callers | PASS | `enrichJoseError()` returns user-friendly messages; raw crypto errors logged server-side only |
 | C-30 | Security review for novel crypto | N/A | No novel cryptographic usage; standard JWT RS256 verification |
 
 **C-1/C-2/C-3 justification**: TLS termination is the responsibility of the reverse proxy
@@ -246,10 +246,10 @@ artifact. The equivalent control is SAST (V-2) which analyzes the source directl
 **Citation**: SDL lists binary analysis for "compiled code" and "native binaries."
 — https://learn.microsoft.com/compliance/assurance/assurance-microsoft-security-development-lifecycle
 
-**V-6 justification**: The plugin's JWT parsing is delegated entirely to the `jsonwebtoken`
-library (maintained by Auth0, 75M weekly downloads). Fuzzing our thin wrapper around it
-provides negligible security value — the attack surface is the library's `decode()` and
-`verify()` functions, which are already fuzz-tested upstream. Our input validation (size
+**V-6 justification**: The plugin's JWT parsing is delegated entirely to the `jose`
+library (maintained by panva, Web Crypto based, zero deps). Fuzzing our thin wrapper around it
+provides negligible security value — the attack surface is the library's `jwtVerify()` and
+`createRemoteJWKSet()` functions, which are well-tested upstream. Our input validation (size
 guard, structure check, kid check) adds defense-in-depth before the library is invoked.
 **Citation**: SDL recommends fuzz testing for "APIs, network interfaces, and parsers."
 Our plugin is not a parser — it's a consumer of a well-tested parsing library.
