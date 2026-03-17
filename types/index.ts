@@ -14,8 +14,6 @@
 export interface EntraConfig {
 	clientId: string;
 	tenantId: string;
-	/** Max OIDC discovery retry attempts. Default: 3. Set to 1 in tests. */
-	discoveryRetries?: number;
 	/**
 	 * Maximum token size in bytes before rejecting without parsing.
 	 * Entra tokens with many group claims can reach 16-20KB.
@@ -29,8 +27,8 @@ export interface EntraConfig {
 	 *   - China (21Vianet): https://login.partner.microsoftonline.cn
 	 *   - Public (default): https://login.microsoftonline.com
 	 *
-	 * The plugin appends /{tenantId}/v2.0/.well-known/openid-configuration
-	 * to discover the JWKS endpoint and valid issuers dynamically.
+	 * The plugin computes deterministic JWKS and issuer URIs from the
+	 * authority and tenantId (no runtime OIDC discovery needed).
 	 *
 	 * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
 	 */

@@ -72,7 +72,7 @@ import EntraPlugin from "../auth-plugin";
 
 function createPlugin(configOverrides?: Record<string, unknown>): EntraPlugin {
 	return new EntraPlugin(
-		{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, discoveryRetries: 1, ...configOverrides } as never,
+		{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, ...configOverrides } as never,
 		{
 			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() },
 			config: {},
@@ -196,87 +196,11 @@ describe("warnIfProxyMisconfigured", () => {
 	});
 });
 
-describe("OIDC discovery failure", () => {
-	it("rejects auth when discovery fails", async () => {
-		mockFetch.mockResolvedValue({ ok: false, status: 400 });
-		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
-
-		const token = await signToken(validClaims());
-		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
-
-		setFetchSuccess();
-	});
-
-	it("concurrent auth requests share a single retry (no thundering herd)", async () => {
-		mockFetch.mockResolvedValue({ ok: false, status: 503 });
-		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
-
-		// Discovery has failed; now restore fetch and fire concurrent requests
-		let fetchCount = 0;
-		mockFetch.mockImplementation((input: string | URL | Request) => {
-			const url = String(input);
-			if (url.includes("openid-configuration")) {
-				fetchCount++;
-				return Promise.resolve({
-					ok: true,
-					json: () => Promise.resolve({ issuer: DISCOVERED_ISSUER, jwks_uri: DISCOVERED_JWKS_URI }),
-				});
-			}
-			if (url.includes("discovery/v2.0/keys")) {
-				return Promise.resolve({
-					ok: true,
-					status: 200,
-					json: () => Promise.resolve({ keys: [publicJwk] }),
-					headers: new Headers({ "content-type": "application/json" }),
-				});
-			}
-			return Promise.resolve({ ok: false, status: 404 });
-		});
-
-		const token = await signToken(validClaims());
-		// Fire 5 concurrent auth calls — should only trigger one discovery fetch
-		await Promise.allSettled([
-			authenticateAsync(plugin, "user@contoso.com", token),
-			authenticateAsync(plugin, "user@contoso.com", token),
-			authenticateAsync(plugin, "user@contoso.com", token),
-			authenticateAsync(plugin, "user@contoso.com", token),
-			authenticateAsync(plugin, "user@contoso.com", token),
-		]);
-
-		expect(fetchCount).toBe(1);
-		setFetchSuccess();
-	});
-
-	it("recovers after discovery failure — success resets state", async () => {
-		mockFetch.mockResolvedValue({ ok: false, status: 503 });
-		const plugin = createPlugin({ discoveryRetries: 1 });
-		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
-
-		// First auth fails (discovery still down)
-		const token = await signToken(validClaims());
-		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/OIDC discovery|not ready/i);
-
-		// Now restore the endpoint
-		setFetchSuccess();
-
-		// Next auth attempt should trigger recovery and succeed
-		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
-		expect(groups).toContain("$authenticated");
-
-		// And subsequent calls should not re-trigger discovery
-		const groups2 = await authenticateAsync(plugin, "user@contoso.com", token);
-		expect(groups2).toContain("$authenticated");
-	});
-});
-
 describe("authenticate", () => {
 	let plugin: EntraPlugin;
-	beforeEach(async () => {
+	beforeEach(() => {
 		setFetchSuccess();
 		plugin = createPlugin();
-		await (plugin as unknown as Record<string, Promise<void> | null>)["_discovery"];
 	});
 
 	it("succeeds when username matches token identity", async () => {
@@ -323,9 +247,10 @@ describe("authenticate", () => {
 		expect(result).toBe(false);
 	});
 
-	it("returns error for unknown kid (no matching JWKS key)", async () => {
+	it("returns false for unknown kid (no matching JWKS key)", async () => {
 		const token = await signToken(validClaims(), { kid: "unknown-kid" });
-		await expect(authenticateAsync(plugin, "user@contoso.com", token)).rejects.toThrow(/matching.*key/i);
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
 	});
 
 	it("returns false for non-JWT string", async () => {

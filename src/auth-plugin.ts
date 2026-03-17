@@ -1,7 +1,7 @@
 import { errorUtils, pluginUtils } from "@verdaccio/core";
 import type { Logger } from "@verdaccio/types";
 import debugCore from "debug";
-import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { JWTPayload, JWTVerifyGetKey } from "jose";
 
 import type { EntraConfig, EntraTokenPayload } from "../types/index";
@@ -25,8 +25,17 @@ export const AUDIENCE_PREFIX = "api://";
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
 
 /**
- * Known Entra issuer URL patterns (used by diagnostics and check-config).
- * The plugin itself resolves issuers dynamically via OIDC discovery.
+ * Entra v2 issuer and JWKS URI patterns.
+ *
+ * For a given tenantId and authority, these are 100% deterministic —
+ * the plugin computes them directly instead of fetching the OIDC
+ * discovery document at runtime. jose's createRemoteJWKSet handles
+ * all JWKS key fetching, caching, rotation, and retries.
+ *
+ * check-config.ts still uses discoverOidc() for pre-flight validation
+ * (confirming the endpoint is reachable and the issuer matches).
+ *
+ * @see https://learn.microsoft.com/entra/identity-platform/v2-protocols-oidc
  */
 export const ISSUERS = {
 	v1: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
@@ -34,6 +43,11 @@ export const ISSUERS = {
 	v2: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
 		`${authority}/${tenantId}/v2.0`,
 } as const;
+
+/** Deterministic JWKS URI for Entra v2 endpoints. */
+export function jwksUri(tenantId: string, authority = DEFAULT_AUTHORITY): string {
+	return `${authority}/${tenantId}/discovery/v2.0/keys`;
+}
 
 /** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */
 function assertGuid(value: string, label: string): void {
@@ -96,7 +110,7 @@ export function warnIfProxyMisconfigured(
 		logger.error(
 			{},
 			"HTTPS_PROXY or HTTP_PROXY is set but NODE_USE_ENV_PROXY is not. " +
-				"Node's native fetch (used for OIDC discovery and JWKS fetching) will IGNORE your proxy. " +
+				"Node's native fetch (used by jose for JWKS key fetching) will IGNORE your proxy. " +
 				"Set NODE_USE_ENV_PROXY=1 in your container/environment to enable proxy support. " +
 				"See https://nodejs.org/en/learn/http/enterprise-network-configuration",
 		);
@@ -136,14 +150,11 @@ export async function discoverOidc(authority: string, tenantId: string): Promise
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
 	private _logger: Logger;
-	private _jwks: JWTVerifyGetKey | undefined;
-	private _issuer: string | undefined;
+	private _jwks: JWTVerifyGetKey;
+	private _issuer: string;
 	private _entraConfig: EntraConfig;
 	private _audience: string;
 	private _maxTokenBytes: number;
-	/** Shared discovery promise. Null when failed — next auth attempt creates a fresh one. */
-	private _discovery: Promise<void> | null;
-	private _discoveryRetries: number;
 
 	public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
 		super(config, appOptions);
@@ -151,13 +162,20 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
 		this._audience = resolved.audience;
 		this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
-		this._discoveryRetries = config.discoveryRetries ?? 3;
 		this._logger = appOptions.logger;
 
-		warnIfProxyMisconfigured(this._logger);
-		this._discovery = this._discover();
+		// Issuer and JWKS URI are deterministic for Entra v2 endpoints.
+		// jose handles all JWKS key fetching, caching, rotation, and retries.
+		this._issuer = ISSUERS.v2(resolved.tenantId, resolved.authority);
+		this._jwks = createRemoteJWKSet(new URL(jwksUri(resolved.tenantId, resolved.authority)));
 
-		debug("EntraPlugin initializing for tenant %s, authority %s, audience %s", resolved.tenantId, resolved.authority, this._audience);
+		warnIfProxyMisconfigured(this._logger);
+
+		this._logger.info(
+			{ issuer: this._issuer, jwks: jwksUri(resolved.tenantId, resolved.authority) },
+			"EntraPlugin ready — issuer: @{issuer}",
+		);
+		debug("EntraPlugin ready — issuer: %s, audience: %s", this._issuer, this._audience);
 	}
 
 	/**
@@ -203,64 +221,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const msg = err instanceof Error ? err.message : String(err);
 			this._logger.warn({ user, err: msg }, "Entra auth failed for @{user}: @{err}");
 			debug("Authentication failed for %s: %s", user, msg);
-			if (this._isServiceError(err)) {
-				cb(errorUtils.getInternalError(msg));
-			} else {
-				cb(null, false);
-			}
+			cb(null, false);
 		});
 	}
 
 	// --- Internals ---
-
-	/**
-	 * Run OIDC discovery with exponential backoff retry.
-	 * On success, sets _issuer and _jwks. On failure, nullifies _discovery
-	 * so the next auth attempt creates a fresh promise (no thundering herd —
-	 * concurrent callers share the same promise until it settles).
-	 *
-	 * jose's createRemoteJWKSet handles JWKS caching, key rotation,
-	 * rate limiting, and kid matching automatically after this.
-	 */
-	private _discover(): Promise<void> {
-		const { authority = DEFAULT_AUTHORITY, tenantId } = this._entraConfig;
-		const maxRetries = this._discoveryRetries;
-
-		const attempt = async (): Promise<void> => {
-			for (let i = 1; i <= maxRetries; i++) {
-				try {
-					const discovery = await discoverOidc(authority, tenantId);
-					this._issuer = discovery.issuer;
-					this._jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
-					this._logger.info(
-						{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
-						"OIDC discovery succeeded — issuer: @{issuer}",
-					);
-					debug("EntraPlugin ready — issuer: %s, jwks: %s", discovery.issuer, discovery.jwks_uri);
-					return;
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					this._logger.error(
-						{ err: msg, attempt: i, maxRetries },
-						"OIDC discovery failed (attempt @{attempt}/@{maxRetries}): @{err}",
-					);
-					debug("OIDC discovery attempt %d/%d failed: %s", i, maxRetries, msg);
-					if (i < maxRetries) {
-						await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i - 1)));
-					}
-				}
-			}
-			// All retries exhausted — null out so next auth attempt retries
-			this._discovery = null;
-			this._logger.error(
-				{ authority, tenantId },
-				"OIDC discovery failed after all retries — will retry on next auth attempt. " +
-					"Check authority (@{authority}) and tenantId (@{tenantId}).",
-			);
-		};
-
-		return attempt();
-	}
 
 	/**
 	 * Validate an Entra ID JWT using jose.
@@ -270,20 +235,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * createRemoteJWKSet handles JWKS fetching, caching, and key rotation.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
-		// Lazy re-discovery: if previous attempt failed (_discovery is null),
-		// create a fresh promise. Concurrent callers share the same promise.
-		if (!this._discovery) {
-			this._discovery = this._discover();
-		}
-
-		await this._discovery;
-		if (!this._jwks || !this._issuer) {
-			throw new DiscoveryError(
-				"Plugin not ready — OIDC discovery has not completed. " +
-					"Check the authority URL and tenant ID.",
-			);
-		}
-
 		try {
 			const { payload } = await jwtVerify(token, this._jwks, {
 				algorithms: ["RS256"],
@@ -292,12 +243,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			});
 			return payload as EntraTokenPayload;
 		} catch (err) {
-			if (err instanceof joseErrors.JWKSNoMatchingKey) {
-				throw new DiscoveryError(
-					`No matching signing key found for this token. ` +
-						"This may indicate the token was not issued by the expected Entra tenant.",
-				);
-			}
 			// Enrich with diagnostics (swap detection, friendly messages) — post-verify only
 			throw new Error(enrichJoseError(err, token, this._entraConfig));
 		}
@@ -310,17 +255,5 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	private _extractStringArray(value: unknown): string[] {
 		if (!Array.isArray(value)) return [];
 		return value.filter((item): item is string => typeof item === "string");
-	}
-
-	private _isServiceError(err: unknown): boolean {
-		return err instanceof DiscoveryError;
-	}
-}
-
-/** Thrown when OIDC discovery or JWKS key resolution fails — a service error. */
-class DiscoveryError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "DiscoveryError";
 	}
 }
