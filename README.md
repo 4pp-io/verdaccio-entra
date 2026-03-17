@@ -147,6 +147,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 
 ## Security Considerations
 
+- **Misconfiguration risk:** If `clientId` or `tenantId` are missing or invalid, the plugin throws at startup. Verdaccio silently skips failed auth plugins and continues booting — potentially with no authentication. Always verify the plugin loaded by checking for the `EntraPlugin ready` log line at startup
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - `security.api.jwt.sign.expiresIn` controls Verdaccio token lifetime (default: 7d in Docker config)
 - Verdaccio's JWT `secret` must be at least 32 characters (required since v6 for `createCipheriv`)
