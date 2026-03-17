@@ -1,0 +1,9 @@
+# The format of this file is documented at:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Fallback: The entire repository is owned by the core team.
+*       @4pp-io/core
+
+# You can also assign specific teams/users to specific directories:
+# /src/           @4pp-io/backend
+# /scripts/       @primeinc
