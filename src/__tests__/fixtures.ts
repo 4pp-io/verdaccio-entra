@@ -21,20 +21,17 @@ export const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
 /** Microsoft Learn placeholder client (application) ID */
 export const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
 
-/** Microsoft's own public tenant — always has a valid JWKS endpoint */
-export const MICROSOFT_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
-
 /** JWKS key ID used in test RSA key pair */
 export const TEST_KID = "test-kid-001";
 
 /** Immutable object ID for the test user (oid claim) */
-export const TEST_USER_OID = "00000000-0000-0000-0000-000000000001";
+const TEST_USER_OID = "00000000-0000-0000-0000-000000000001";
 
 /** Pairwise subject identifier for the test user (sub claim) */
-export const TEST_USER_SUB = "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ";
+const TEST_USER_SUB = "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ";
 
 /** Client app ID of the requesting application (azp claim) */
-export const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
+const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
 
 // ---------------------------------------------------------------------------
 // Realistic Entra v2.0 access token claims factory
@@ -53,33 +50,33 @@ export const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
  * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference#payload-claims
  */
 export function entraV2Claims(overrides?: Record<string, unknown>): Record<string, unknown> {
-	return {
-		// --- Required v2.0 claims ---
-		aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
-		iss: ISSUERS.v2(TEST_TENANT),
-		tid: TEST_TENANT,
-		oid: TEST_USER_OID,
-		sub: TEST_USER_SUB,
-		ver: "2.0",
+  return {
+    // --- Required v2.0 claims ---
+    aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
+    iss: ISSUERS.v2(TEST_TENANT),
+    tid: TEST_TENANT,
+    oid: TEST_USER_OID,
+    sub: TEST_USER_SUB,
+    ver: "2.0",
 
-		// --- Client application identity (v2.0) ---
-		azp: TEST_AZP,
-		azpacr: "0", // public client
+    // --- Client application identity (v2.0) ---
+    azp: TEST_AZP,
+    azpacr: "0", // public client
 
-		// --- User identity claims ---
-		preferred_username: "user@contoso.com",
-		name: "Test User",
+    // --- User identity claims ---
+    preferred_username: "user@contoso.com",
+    name: "Test User",
 
-		// --- Authorization claims ---
-		scp: "access_as_user",
-		groups: ["developers"],
-		roles: ["registry-admin"],
+    // --- Authorization claims ---
+    scp: "access_as_user",
+    groups: ["developers"],
+    roles: ["registry-admin"],
 
-		// --- Session / internal (opaque — plugin should ignore) ---
-		uti: "AbCdEf123456",
-		aio: "ASQy/4TAAAAA",
-		rh: "0.AAAA",
+    // --- Session / internal (opaque — plugin should ignore) ---
+    uti: "AbCdEf123456",
+    aio: "ASQy/4TAAAAA",
+    rh: "0.AAAA",
 
-		...overrides,
-	};
+    ...overrides,
+  };
 }

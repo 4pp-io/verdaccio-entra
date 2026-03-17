@@ -1,16 +1,8 @@
 # top-most EditorConfig file
 root = true
 
-# Unix-style newlines with a newline ending every file
 [*]
 end_of_line = lf
 insert_final_newline = true
-
-# Tab indentation for TypeScript source
-[*.ts]
-indent_style = tab
-
-# 2 space indentation for config/CI files
-[{.,}*.{js,yml,yaml,json}]
 indent_style = space
 indent_size = 2

@@ -8,14 +8,15 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
-  contents: write      # push tags, create GH releases
+  contents: write # push tags, create GH releases
   pull-requests: write # create/update "Version Packages" PR
-  id-token: write      # npm provenance via OIDC
+  id-token: write # npm provenance via OIDC
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v6
@@ -25,7 +26,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install Dependencies
         run: npm ci
