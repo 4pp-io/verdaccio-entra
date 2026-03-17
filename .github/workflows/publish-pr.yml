@@ -39,6 +39,17 @@ jobs:
         env:
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
 
+      - name: Verify CI passed on PR (SDL V-12)
+        run: |
+          FAILED=$(gh pr checks ${{ github.event.issue.number }} --json name,state \
+            --jq '[.[] | select(.name == "build-and-test" or .name == "secret-scanning") | select(.state != "SUCCESS")] | length')
+          if [[ "$FAILED" != "0" ]]; then
+            echo "::error::Required status checks have not passed. Cannot publish snapshot until CI is green."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/checkout@v6
 
       - name: Checkout pull request
