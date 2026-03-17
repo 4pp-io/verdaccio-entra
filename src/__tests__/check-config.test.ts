@@ -102,6 +102,39 @@ describe("runChecks", () => {
 		expect(fail?.detail).toContain("invalid data");
 	});
 
+	it("detects null JWKS response", async () => {
+		mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve(null),
+		});
+		const results = await runChecks(input());
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("invalid data");
+	});
+
+	it("detects empty JWKS keys array", async () => {
+		mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ keys: [] }),
+		});
+		const results = await runChecks(input());
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("invalid data");
+	});
+
+	it("detects JWKS keys array with invalid objects", async () => {
+		mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ keys: ["string-not-object"] }),
+		});
+		const results = await runChecks(input());
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("invalid data");
+	});
+
 	it("handles network error gracefully", async () => {
 		mockFetch.mockRejectedValue(new Error("ENOTFOUND"));
 		const results = await runChecks(input());
