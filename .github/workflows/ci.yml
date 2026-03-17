@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
 
       - name: Install actionlint
-        run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest /usr/local/bin
+        run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) v1.7.11 /usr/local/bin
         shell: bash
 
       - name: Lint

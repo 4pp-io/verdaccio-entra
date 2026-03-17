@@ -27,7 +27,7 @@ async function main() {
     if (sanitizedUrl.includes("discovery/v2.0/keys")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(jwksJson);
-    } else if (req.url === "/_test/keys.json") {
+    } else if (sanitizedUrl === "/_test/keys.json") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(keysJson);
     } else {

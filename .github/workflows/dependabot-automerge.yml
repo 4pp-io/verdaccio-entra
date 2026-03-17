@@ -60,7 +60,8 @@ jobs:
 
           PR_TITLE=$(gh pr view "$PR_URL" --json title --jq '.title')
 
-          cat > "$CHANGESET_FILE" << EOF
+          export PR_TITLE
+          envsubst '$PR_TITLE' << 'EOF' > "$CHANGESET_FILE"
           ---
           '@4pp-io/verdaccio-entra': patch
           ---

@@ -100,14 +100,17 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.issue.number }}
 
-      - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}"
+      - run: npx changeset version --snapshot "$SNAPSHOT_TAG"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SNAPSHOT_TAG: ${{ steps.snapshot_version.outputs.snapshot_tag }}
 
       - run: npm run build
 
       - name: Publish snapshot versions
-        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}" --no-git-tag --provenance
+        run: npx changeset publish --tag "$PUBLISH_TAG" --no-git-tag --provenance
+        env:
+          PUBLISH_TAG: ${{ steps.snapshot_version.outputs.publish_tag }}
 
       - name: Post comment with published version
         run: |
