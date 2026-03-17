@@ -1,12 +1,17 @@
 /**
  * Config validation logic — pure functions, no side effects.
  *
+ * Uses the same discoverOidc function as the plugin — no duplicated
+ * network logic. Changes to how the plugin resolves authorities are
+ * automatically reflected here.
+ *
  * Used by:
  *   - scripts/check-config.ts (CLI wrapper)
  *   - src/__tests__/check-config.test.ts (unit tests, no subprocess needed)
  */
 
-import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY } from "./auth-plugin";
+import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY, discoverOidc } from "./auth-plugin";
+import type { OidcDiscovery } from "./auth-plugin";
 
 export interface CheckResult {
 	label: string;
@@ -19,8 +24,6 @@ export interface CheckConfigInput {
 	tenantId: string;
 	/** Entra authority URL — defaults to Azure Public cloud */
 	authority?: string;
-	/** Override fetch for testing */
-	fetcher?: typeof fetch;
 }
 
 /**
@@ -29,7 +32,7 @@ export interface CheckConfigInput {
  */
 export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]> {
 	const results: CheckResult[] = [];
-	const { clientId, tenantId, authority = DEFAULT_AUTHORITY, fetcher = fetch } = input;
+	const { clientId, tenantId, authority = DEFAULT_AUTHORITY } = input;
 
 	const check = (label: string, ok: boolean, detail: string): void => {
 		results.push({ label, ok, detail });
@@ -75,60 +78,32 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 		);
 	}
 
-	// --- 3. Check JWKS endpoint ---
+	// --- 3. OIDC discovery (uses the same function as the plugin) ---
 	if (GUID_RE.test(tenantId)) {
-		const jwksUrl = `${authority}/${tenantId}/discovery/v2.0/keys`;
+		let discovery: OidcDiscovery | undefined;
 		try {
-			const res = await fetcher(jwksUrl);
-			check(
-				"JWKS endpoint is reachable",
-				res.ok,
-				`HTTP ${res.status} from ${jwksUrl}. This usually means the tenant ID is wrong.`,
-			);
-			if (res.ok) {
-				const body = (await res.json()) as { keys?: unknown[] };
-				check(
-					"JWKS endpoint returns signing keys",
-					Array.isArray(body.keys) && body.keys.length > 0,
-					`No keys found at ${jwksUrl}. The tenant may not have any app registrations.`,
-				);
-			}
-		} catch (err) {
-			// diagnostic: error recorded in results — caller decides exit code
-			check(
-				"JWKS endpoint is reachable",
-				false,
-				`Network error fetching ${jwksUrl}: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
+			discovery = await discoverOidc(authority, tenantId);
+			check("OIDC discovery is reachable", true, "");
 
-	// --- 4. Check OpenID Connect discovery ---
-	if (GUID_RE.test(tenantId)) {
-		const oidcUrl = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
-		try {
-			const res = await fetcher(oidcUrl);
+			const expectedIssuer = ISSUERS.v2(tenantId, authority);
 			check(
-				"OpenID Connect discovery is reachable",
-				res.ok,
-				`HTTP ${res.status} from ${oidcUrl}. Verify the tenant ID is correct.`,
+				"Issuer matches tenant ID",
+				discovery.issuer === expectedIssuer,
+				`Expected issuer "${expectedIssuer}", got "${discovery.issuer ?? "(missing)"}". ` +
+					"This may indicate the tenant ID is wrong or you're hitting the wrong authority.",
 			);
-			if (res.ok) {
-				const body = (await res.json()) as { issuer?: string };
-				const expectedIssuer = ISSUERS.v2(tenantId, authority);
-				check(
-					"Issuer matches tenant ID",
-					body.issuer === expectedIssuer,
-					`Expected issuer "${expectedIssuer}", got "${body.issuer ?? "(missing)"}". ` +
-						"This may indicate the tenant ID is wrong or you're hitting the wrong authority.",
-				);
-			}
+
+			check(
+				"JWKS URI discovered",
+				discovery.jwks_uri.length > 0,
+				"OIDC discovery returned an empty jwks_uri.",
+			);
 		} catch (err) {
 			// diagnostic: error recorded in results — caller decides exit code
 			check(
-				"OpenID Connect discovery is reachable",
+				"OIDC discovery is reachable",
 				false,
-				`Network error: ${err instanceof Error ? err.message : String(err)}`,
+				`${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
 	}

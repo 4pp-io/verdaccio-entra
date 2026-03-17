@@ -47,7 +47,7 @@ function assertGuid(value: string, label: string): void {
 }
 
 /** OIDC discovery response shape (subset we need) */
-interface OidcDiscovery {
+export interface OidcDiscovery {
 	issuer: string;
 	jwks_uri: string;
 }
@@ -57,7 +57,7 @@ interface OidcDiscovery {
  * Proxy support via NODE_USE_ENV_PROXY=1 (Node 22.21+).
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
-async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
+export async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
 	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
 	const res = await fetch(url);
 	if (!res.ok) {
