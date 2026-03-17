@@ -77,21 +77,20 @@ jobs:
 
           echo "publish_tag=$PUBLISH_TAG" >> "$GITHUB_OUTPUT"
           echo "snapshot_tag=$SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
-          echo "version=0.0.0-$SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
 
-      - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}" --snapshot-prerelease-template "{tag}"
+      - run: npx changeset version --snapshot "${{ steps.snapshot_version.outputs.snapshot_tag }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm run build
 
       - name: Publish snapshot versions
-        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}" --provenance
+        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}" --no-git-tag --provenance
 
       - name: Post comment with published version
         run: |
           cat <<'BODY' > /tmp/comment-body.md
-          Published snapshot version `${{ steps.snapshot_version.outputs.version }}` in response to [this comment](${{ github.event.comment.html_url }}).
+          Published snapshot `${{ steps.snapshot_version.outputs.snapshot_tag }}` in response to [this comment](${{ github.event.comment.html_url }}). Install with `npm i @4pp-io/verdaccio-entra@${{ steps.snapshot_version.outputs.publish_tag }}`
           BODY
           gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/comment-body.md
         env:
