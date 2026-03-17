@@ -11,17 +11,18 @@ permissions:
 jobs:
   generate-changeset:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.actor == 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'dependencies')
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Required for mscharley/dependency-changesets-action to see the PR commit history
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Add changeset
-        uses: mscharley/dependency-changesets-action@v1.0.8
+        uses: mscharley/dependency-changesets-action@v1
         with:
           # GitHub Actions normally restricts the default GITHUB_TOKEN on `pull_request` events
           # from forks/Dependabot. Using `pull_request_target` solves this, but we MUST ensure
