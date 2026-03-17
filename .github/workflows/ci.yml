@@ -31,6 +31,9 @@ jobs:
       - name: Test with coverage (95/90/95 thresholds)
         run: npm run test:coverage
 
+      - name: E2E Integration Tests (Testcontainers)
+        run: npm run test:e2e
+
       - name: Security audit (production deps only)
         run: npm audit --audit-level=high --omit=dev
 

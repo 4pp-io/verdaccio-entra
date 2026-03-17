@@ -28,7 +28,19 @@ export async function discoverOidc(authority: string, tenantId: string): Promise
 				"Verify your tenantId and authority are correct.",
 		);
 	}
-	return res.json() as Promise<OidcDiscovery>;
+	const data = (await res.json()) as unknown;
+	if (
+		!data ||
+		typeof data !== "object" ||
+		typeof (data as Record<string, unknown>).issuer !== "string" ||
+		typeof (data as Record<string, unknown>).jwks_uri !== "string"
+	) {
+		throw new Error(
+			`OIDC discovery failed: invalid JSON shape returned from ${url}. ` +
+				"Expected an object containing 'issuer' and 'jwks_uri' strings.",
+		);
+	}
+	return data as OidcDiscovery;
 }
 
 export interface CheckResult {

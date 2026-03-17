@@ -186,7 +186,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 */
 	public authenticate(user: string, password: string, cb: pluginUtils.AuthCallback): void {
 		debug("Authenticating user: %s", user);
-		if (password.length > this._maxTokenBytes) {
+		if (Buffer.byteLength(password) > this._maxTokenBytes) {
 			cb(null, false);
 			return;
 		}
