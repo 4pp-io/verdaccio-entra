@@ -69,21 +69,9 @@ Entra ID (IdP)          Plugin (JWT validation)         Verdaccio (authz)
 | JWT signature      | RS256 only, verified against JWKS endpoint                                  |
 | JWT claims         | Issuer must match tenant, audience must match `api://{clientId}`            |
 
-## Verdaccio Version Notes
-
-The auth plugin interface (`pluginUtils.Auth<T>`) is stable across Verdaccio v6, v8, and v9.
-However, v6+ changed the legacy token signature from `crypto.createDecipher` (deprecated) to
-`crypto.createCipheriv`. This means:
-
-- The `secret` in config.yaml **must be at least 32 characters** (used as AES-256 key for `crypto.createCipheriv` which requires a 32-byte key: https://nodejs.org/api/crypto.html#cryptocreatecipherivalgorithm-key-iv-options)
-- All tokens from Verdaccio v5 and earlier are invalidated on upgrade to v6
-- The plugin config type should NOT extend Verdaccio's `Config` — the plugin loader passes
-  only the per-plugin subtree (e.g., `{ clientId, tenantId }`), not the full config
-
 ## Residual Risks
 
-1. **Verdaccio HS256 secret**: Verdaccio's own JWT is signed with a shared secret. Must be at least 32 characters. If weak or leaked, tokens can be forged. Rotate via config change + restart.
-2. **No token revocation**: Verdaccio does not support JWT revocation lists. A compromised Verdaccio token remains valid until expiry (7d default).
-3. **JWKS availability**: If `login.microsoftonline.com` is unreachable, new logins fail. Existing sessions continue working.
-4. **v8 skipped, v9 pending**: Verdaccio v8 was officially skipped. When v9 ships (requires Node.js 24), a migration to ESM dual-output may be needed — but the auth plugin interface is unchanged.
-5. **Username Mutability**: Verdaccio uses the username provided during `npm login` to denote package ownership. Entra ID treats username claims (`upn`, `preferred_username`, `email`) as mutable (e.g., they change upon marriage or legal name changes). If a user's username changes, they will authenticate with the new name, but existing packages will retain the old name in metadata. This is accepted as a cosmetic limitation of Verdaccio's architecture. Access control relies on immutable group claims, not the mutable username string, preventing actual privilege escalation.
+1. **Verdaccio HS256 secret**: Shared secret must be ≥32 characters. If leaked, rotate and restart.
+2. **No token revocation**: Compromised Verdaccio tokens remain valid until expiry (7d default).
+3. **JWKS availability**: If Entra's JWKS endpoint is unreachable, new logins fail. Existing sessions continue.
+4. **Username mutability**: See [SECURITY.md](SECURITY.md#username-mutability).

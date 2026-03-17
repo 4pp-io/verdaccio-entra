@@ -24,3 +24,5 @@ Entra `groups` claims contain opaque GUIDs. [App Roles](https://learn.microsoft.
 - Tokens exceeding `maxTokenBytes` (default: 256KB) are rejected before JWT parsing
 - JWKS keys are cached with a 30-second cooldown between refetches (jose default)
 - Rotating the Verdaccio `secret` invalidates all existing client tokens
+
+This plugin follows Microsoft SDL principles: threat-modeled ([threat-model.md](threat-model.md)), input-validated, no custom crypto, dependency scanning in CI. See [incident-response.md](incident-response.md) for runbooks.
