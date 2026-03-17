@@ -96,8 +96,8 @@ export function resolveConfig(
  *
  * Node's native fetch ignores HTTP_PROXY/HTTPS_PROXY unless
  * NODE_USE_ENV_PROXY=1 is set (stable since Node v21.7.0/v20.13.0).
- * jose's createRemoteJWKSet also uses fetch internally, so both
- * OIDC discovery and JWKS fetching are affected.
+ * jose's createRemoteJWKSet also uses fetch internally for
+ * JWKS key fetching.
  *
  * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
  */

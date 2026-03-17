@@ -8,8 +8,7 @@ import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, ISSUERS, resolveConfig, warnI
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
 
-const DISCOVERED_ISSUER = ISSUERS.v2(TEST_TENANT);
-const DISCOVERED_JWKS_URI = `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys`;
+const EXPECTED_ISSUER = ISSUERS.v2(TEST_TENANT);
 
 beforeAll(async () => {
 	const pair = await generateKeyPair("RS256");
@@ -17,19 +16,13 @@ beforeAll(async () => {
 	publicJwk = { ...(await exportJWK(pair.publicKey)), kid: TEST_KID, use: "sig", alg: "RS256" };
 });
 
-// --- Mock fetch: serves both OIDC discovery AND JWKS endpoints ---
+// --- Mock fetch: serves JWKS endpoint for jose's createRemoteJWKSet ---
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function setFetchSuccess(): void {
 	mockFetch.mockImplementation((input: string | URL | Request) => {
 		const url = String(input);
-		if (url.includes("openid-configuration")) {
-			return Promise.resolve({
-				ok: true,
-				json: () => Promise.resolve({ issuer: DISCOVERED_ISSUER, jwks_uri: DISCOVERED_JWKS_URI }),
-			});
-		}
 		if (url.includes("discovery/v2.0/keys")) {
 			return Promise.resolve({
 				ok: true,
@@ -60,7 +53,7 @@ async function signToken(
 function validClaims(overrides?: Record<string, unknown>): Record<string, unknown> {
 	return {
 		preferred_username: "user@contoso.com",
-		iss: DISCOVERED_ISSUER,
+		iss: EXPECTED_ISSUER,
 		aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
 		groups: ["developers"],
 		roles: ["registry-admin"],
@@ -178,7 +171,7 @@ describe("warnIfProxyMisconfigured", () => {
 		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
 		warnIfProxyMisconfigured(logger, { HTTPS_PROXY: "http://proxy:8080" });
 		expect(error).toHaveBeenCalledOnce();
-		expect(error.mock.calls[0][1]).toMatch(/NODE_USE_ENV_PROXY/);
+		expect(error.mock.calls[0]?.[1]).toMatch(/NODE_USE_ENV_PROXY/);
 	});
 
 	it("does not warn when NODE_USE_ENV_PROXY is set", () => {

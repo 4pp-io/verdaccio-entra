@@ -96,7 +96,7 @@ export async function runChecks(input: CheckConfigInput): Promise<CheckResult[]>
 		);
 	}
 
-	// --- 3. OIDC discovery (uses the same function as the plugin) ---
+	// --- 3. OIDC discovery (pre-flight reachability check) ---
 	if (GUID_RE.test(tenantId)) {
 		let discovery: OidcDiscovery | undefined;
 		try {
