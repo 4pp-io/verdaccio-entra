@@ -2,7 +2,7 @@
  * Standalone mock JWKS server for e2e testing.
  *
  * 1. Generates an RSA key pair
- * 2. Writes the private key (JWK) + test metadata to /shared/test-keys.json
+ * 2. Exposes the private key (JWK) + test metadata at http://0.0.0.0:9877/_test/keys.json
  *    so the test runner can sign tokens
  * 3. Serves JWKS on http://0.0.0.0:9877/{tenantId}/discovery/v2.0/keys
  */
@@ -40,4 +40,7 @@ async function main() {
   });
 }
 
-main();
+main().catch((err) => {
+  console.error("Failed to start mock JWKS server:", err);
+  process.exit(1);
+});

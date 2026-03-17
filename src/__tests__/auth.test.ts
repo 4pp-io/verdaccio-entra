@@ -234,6 +234,48 @@ describe("resolveConfig", () => {
     const result = resolveConfig({ clientId: "", tenantId: "" }, env);
     expect(result.clientId).toBe(TEST_CLIENT);
   });
+
+  it("resolves all boolean and numeric env overrides", () => {
+    const result = resolveConfig(
+      { clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+      {
+        ENTRA_FAIL_CLOSED: "true",
+        ENTRA_ALLOW_GROUP_OVERAGE: "true",
+        ENTRA_MAX_TOKEN_BYTES: "1024",
+        ENTRA_CLOCK_TOLERANCE_SECONDS: "60",
+      },
+    );
+    expect(result.failClosed).toBe(true);
+    expect(result.allowGroupOverage).toBe(true);
+    expect(result.maxTokenBytes).toBe(1024);
+    expect(result.clockToleranceSeconds).toBe(60);
+  });
+
+  it("falls back to config defaults when env vars are absent", () => {
+    const result = resolveConfig(
+      {
+        clientId: TEST_CLIENT,
+        tenantId: TEST_TENANT,
+        failClosed: true,
+        allowGroupOverage: true,
+        maxTokenBytes: 512,
+        clockToleranceSeconds: 10,
+      },
+      {},
+    );
+    expect(result.failClosed).toBe(true);
+    expect(result.allowGroupOverage).toBe(true);
+    expect(result.maxTokenBytes).toBe(512);
+    expect(result.clockToleranceSeconds).toBe(10);
+  });
+
+  it("ignores non-numeric ENTRA_MAX_TOKEN_BYTES (falls back to config/default)", () => {
+    const result = resolveConfig(
+      { clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+      { ENTRA_MAX_TOKEN_BYTES: "not-a-number" },
+    );
+    expect(result.maxTokenBytes).toBe(256_000); // DEFAULT_MAX_TOKEN_BYTES
+  });
 });
 
 describe("warnIfProxyMisconfigured", () => {

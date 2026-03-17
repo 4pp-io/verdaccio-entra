@@ -71,6 +71,12 @@ describe("enrichJoseError", () => {
     expect(msg).toContain("not yet valid");
   });
 
+  it("enriches unknown claim validation failure with generic message", async () => {
+    const err = new joseErrors.JWTClaimValidationFailed("bad value", {}, "azp", "check_failed");
+    const msg = enrichJoseError(err, await sign({}), config);
+    expect(msg).toContain("Token claim validation failed: azp");
+  });
+
   it("enriches signature verification failure", async () => {
     const err = new joseErrors.JWSSignatureVerificationFailed();
     const msg = enrichJoseError(err, await sign({}), config);

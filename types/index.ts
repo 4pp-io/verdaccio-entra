@@ -77,6 +77,10 @@ import * as v from "valibot";
  * Schema for the Entra ID token claims this plugin inspects.
  * Uses looseObject so additional JWT claims (iat, nbf, azp, etc.) pass through.
  * The type `EntraTokenPayload` is derived from this schema — no manual sync needed.
+ *
+ * Note: iss, aud, and exp are NOT validated here — jose's jwtVerify already
+ * enforces those before the payload reaches this schema. Duplicating that
+ * validation would reject valid tokens (e.g. aud can be string | string[]).
  */
 export const EntraTokenPayloadSchema = v.looseObject({
   oid: v.optional(v.string()),
@@ -86,9 +90,6 @@ export const EntraTokenPayloadSchema = v.looseObject({
   email: v.optional(v.string()),
   groups: v.optional(v.array(v.string())),
   roles: v.optional(v.array(v.string())),
-  iss: v.optional(v.string()),
-  aud: v.optional(v.string()),
-  exp: v.optional(v.number()),
 });
 
 /** Claims used by the plugin from a validated Entra ID access token. */

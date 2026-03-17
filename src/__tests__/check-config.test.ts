@@ -189,6 +189,7 @@ describe("runChecks", () => {
 
 describe("retry behavior", () => {
   it("retries on 5xx then succeeds", async () => {
+    vi.useFakeTimers();
     mockFetch
       .mockResolvedValueOnce({ ok: false, status: 503, headers: new Headers() })
       .mockResolvedValueOnce({ ok: false, status: 502, headers: new Headers() })
@@ -196,7 +197,9 @@ describe("retry behavior", () => {
         ok: true,
         json: () => Promise.resolve({ keys: [{ kid: "k", kty: "RSA" }] }),
       });
-    const results = await runChecks(input());
+    const promise = runChecks(input());
+    await vi.runAllTimersAsync();
+    const results = await promise;
     expect(results.find((r) => r.label === "JWKS endpoint is reachable and returns keys")?.ok).toBe(
       true,
     );
@@ -204,11 +207,30 @@ describe("retry behavior", () => {
   });
 
   it("retries on network error (TypeError) then succeeds", async () => {
+    vi.useFakeTimers();
     mockFetch.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ keys: [{ kid: "k", kty: "RSA" }] }),
     });
-    const results = await runChecks(input());
+    const promise = runChecks(input());
+    await vi.runAllTimersAsync();
+    const results = await promise;
+    expect(results.find((r) => r.label === "JWKS endpoint is reachable and returns keys")?.ok).toBe(
+      true,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries on timeout (DOMException) then succeeds", async () => {
+    vi.useFakeTimers();
+    const timeoutErr = new DOMException("The operation was aborted", "TimeoutError");
+    mockFetch.mockRejectedValueOnce(timeoutErr).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ keys: [{ kid: "k", kty: "RSA" }] }),
+    });
+    const promise = runChecks(input());
+    await vi.runAllTimersAsync();
+    const results = await promise;
     expect(results.find((r) => r.label === "JWKS endpoint is reachable and returns keys")?.ok).toBe(
       true,
     );
@@ -225,12 +247,15 @@ describe("retry behavior", () => {
   });
 
   it("gives up after max attempts on persistent 5xx", async () => {
+    vi.useFakeTimers();
     const headers = new Headers();
     mockFetch
       .mockResolvedValueOnce({ ok: false, status: 500, headers })
       .mockResolvedValueOnce({ ok: false, status: 500, headers })
       .mockResolvedValueOnce({ ok: false, status: 500, headers });
-    const results = await runChecks(input());
+    const promise = runChecks(input());
+    await vi.runAllTimersAsync();
+    const results = await promise;
     const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
     expect(fail?.ok).toBe(false);
     expect(fail?.detail).toContain("HTTP 500");
@@ -238,6 +263,7 @@ describe("retry behavior", () => {
   });
 
   it("respects Retry-After header on 429", async () => {
+    vi.useFakeTimers();
     const headers429 = new Headers({ "Retry-After": "1" });
     mockFetch
       .mockResolvedValueOnce({ ok: false, status: 429, headers: headers429 })
@@ -245,7 +271,9 @@ describe("retry behavior", () => {
         ok: true,
         json: () => Promise.resolve({ keys: [{ kid: "k", kty: "RSA" }] }),
       });
-    const results = await runChecks(input());
+    const promise = runChecks(input());
+    await vi.runAllTimersAsync();
+    const results = await promise;
     expect(results.find((r) => r.label === "JWKS endpoint is reachable and returns keys")?.ok).toBe(
       true,
     );

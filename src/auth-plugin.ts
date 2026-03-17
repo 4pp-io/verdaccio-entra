@@ -46,8 +46,8 @@ export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
  * discovery document at runtime. jose's createRemoteJWKSet handles
  * all JWKS key fetching, caching, rotation, and retries.
  *
- * check-config.ts has its own discoverOidc() for pre-flight validation
- * (confirming the endpoint is reachable and the issuer matches).
+ * check-config.ts verifies the deterministic JWKS endpoint is reachable
+ * as a pre-flight validation step.
  *
  * @see https://learn.microsoft.com/entra/identity-platform/v2-protocols-oidc
  */
