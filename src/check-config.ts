@@ -1,17 +1,35 @@
 /**
  * Config validation logic — pure functions, no side effects.
  *
- * Uses the same discoverOidc function as the plugin — no duplicated
- * network logic. Changes to how the plugin resolves authorities are
- * automatically reflected here.
- *
  * Used by:
  *   - scripts/check-config.ts (CLI wrapper)
  *   - src/__tests__/check-config.test.ts (unit tests, no subprocess needed)
  */
 
-import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY, discoverOidc } from "./auth-plugin";
-import type { OidcDiscovery } from "./auth-plugin";
+import { GUID_RE, AUDIENCE_PREFIX, ISSUERS, DEFAULT_AUTHORITY } from "./auth-plugin";
+
+/** OIDC discovery response shape (subset we need) */
+export interface OidcDiscovery {
+	issuer: string;
+	jwks_uri: string;
+}
+
+/**
+ * Fetch OIDC discovery document for pre-flight validation.
+ * Proxy support via NODE_USE_ENV_PROXY=1 (Node 20.13+/21.7+).
+ * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
+ */
+export async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
+	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
+	const res = await fetch(url);
+	if (!res.ok) {
+		throw new Error(
+			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
+				"Verify your tenantId and authority are correct.",
+		);
+	}
+	return res.json() as Promise<OidcDiscovery>;
+}
 
 export interface CheckResult {
 	label: string;

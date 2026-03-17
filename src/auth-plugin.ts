@@ -32,7 +32,7 @@ export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
  * discovery document at runtime. jose's createRemoteJWKSet handles
  * all JWKS key fetching, caching, rotation, and retries.
  *
- * check-config.ts still uses discoverOidc() for pre-flight validation
+ * check-config.ts has its own discoverOidc() for pre-flight validation
  * (confirming the endpoint is reachable and the issuer matches).
  *
  * @see https://learn.microsoft.com/entra/identity-platform/v2-protocols-oidc
@@ -84,12 +84,6 @@ export function resolveConfig(
 	return { clientId, tenantId, authority, audience };
 }
 
-/** OIDC discovery response shape (subset we need) */
-export interface OidcDiscovery {
-	issuer: string;
-	jwks_uri: string;
-}
-
 /**
  * Warn if proxy env vars are set but Node won't use them.
  *
@@ -115,23 +109,6 @@ export function warnIfProxyMisconfigured(
 				"See https://nodejs.org/en/learn/http/enterprise-network-configuration",
 		);
 	}
-}
-
-/**
- * Fetch OIDC discovery document.
- * Proxy support via NODE_USE_ENV_PROXY=1 (Node 20.13+/21.7+).
- * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
- */
-export async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
-	const url = `${authority}/${tenantId}/v2.0/.well-known/openid-configuration`;
-	const res = await fetch(url);
-	if (!res.ok) {
-		throw new Error(
-			`OIDC discovery failed: HTTP ${res.status} from ${url}. ` +
-				"Verify your tenantId and authority are correct.",
-		);
-	}
-	return res.json() as Promise<OidcDiscovery>;
 }
 
 /**
