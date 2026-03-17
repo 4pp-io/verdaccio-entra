@@ -53,33 +53,33 @@ export const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
  * @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference#payload-claims
  */
 export function entraV2Claims(overrides?: Record<string, unknown>): Record<string, unknown> {
-	return {
-		// --- Required v2.0 claims ---
-		aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
-		iss: ISSUERS.v2(TEST_TENANT),
-		tid: TEST_TENANT,
-		oid: TEST_USER_OID,
-		sub: TEST_USER_SUB,
-		ver: "2.0",
+  return {
+    // --- Required v2.0 claims ---
+    aud: `${AUDIENCE_PREFIX}${TEST_CLIENT}`,
+    iss: ISSUERS.v2(TEST_TENANT),
+    tid: TEST_TENANT,
+    oid: TEST_USER_OID,
+    sub: TEST_USER_SUB,
+    ver: "2.0",
 
-		// --- Client application identity (v2.0) ---
-		azp: TEST_AZP,
-		azpacr: "0", // public client
+    // --- Client application identity (v2.0) ---
+    azp: TEST_AZP,
+    azpacr: "0", // public client
 
-		// --- User identity claims ---
-		preferred_username: "user@contoso.com",
-		name: "Test User",
+    // --- User identity claims ---
+    preferred_username: "user@contoso.com",
+    name: "Test User",
 
-		// --- Authorization claims ---
-		scp: "access_as_user",
-		groups: ["developers"],
-		roles: ["registry-admin"],
+    // --- Authorization claims ---
+    scp: "access_as_user",
+    groups: ["developers"],
+    roles: ["registry-admin"],
 
-		// --- Session / internal (opaque — plugin should ignore) ---
-		uti: "AbCdEf123456",
-		aio: "ASQy/4TAAAAA",
-		rh: "0.AAAA",
+    // --- Session / internal (opaque — plugin should ignore) ---
+    uti: "AbCdEf123456",
+    aio: "ASQy/4TAAAAA",
+    rh: "0.AAAA",
 
-		...overrides,
-	};
+    ...overrides,
+  };
 }

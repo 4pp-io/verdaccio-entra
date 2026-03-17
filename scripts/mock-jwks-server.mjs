@@ -15,30 +15,30 @@ const PORT = 9877;
 const KID = "e2e-test-key";
 
 async function main() {
-	const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
-	const publicJwk = { ...(await exportJWK(publicKey)), kid: KID, use: "sig", alg: "RS256" };
-	const privateJwk = { ...(await exportJWK(privateKey)), kid: KID, alg: "RS256" };
-	const jwksJson = JSON.stringify({ keys: [publicJwk] });
+  const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
+  const publicJwk = { ...(await exportJWK(publicKey)), kid: KID, use: "sig", alg: "RS256" };
+  const privateJwk = { ...(await exportJWK(privateKey)), kid: KID, alg: "RS256" };
+  const jwksJson = JSON.stringify({ keys: [publicJwk] });
 
-	const keysJson = JSON.stringify({ privateJwk, kid: KID });
+  const keysJson = JSON.stringify({ privateJwk, kid: KID });
 
-	const server = createServer((req, res) => {
-		console.log("%s %s", req.method, req.url);
-		if (req.url?.includes("discovery/v2.0/keys")) {
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(jwksJson);
-		} else if (req.url === "/_test/keys.json") {
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(keysJson);
-		} else {
-			res.writeHead(404);
-			res.end("not found");
-		}
-	});
+  const server = createServer((req, res) => {
+    console.log("%s %s", req.method, req.url);
+    if (req.url?.includes("discovery/v2.0/keys")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(jwksJson);
+    } else if (req.url === "/_test/keys.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(keysJson);
+    } else {
+      res.writeHead(404);
+      res.end("not found");
+    }
+  });
 
-	server.listen(PORT, "0.0.0.0", () => {
-		console.log("Mock JWKS server listening on :%d", PORT);
-	});
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log("Mock JWKS server listening on :%d", PORT);
+  });
 }
 
 main();

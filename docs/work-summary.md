@@ -9,6 +9,7 @@
 ## What we started with
 
 A greenfield Verdaccio auth plugin for Microsoft Entra ID that:
+
 - Had zero tests
 - Used v8-next npm dependencies on a v6 Docker runtime
 - Had `noImplicitAny: false` overriding `strict: true`
@@ -52,47 +53,47 @@ docs/
 
 ### Key design decisions
 
-| Decision | Why |
-|---|---|
-| `jose` instead of `jsonwebtoken` + `jwks-rsa` | Web Crypto native, typed error codes, `createRemoteJWKSet` handles JWKS caching/rotation/rate-limiting. Eliminates manual OIDC state machine. |
-| AuthN only — no authz hooks | Verdaccio handles authorization natively from `authenticate()` groups. Custom hooks broke user-level access. |
-| OIDC discovery instead of hardcoded URLs | Supports sovereign clouds (US Gov, China) without code changes. |
-| `NODE_USE_ENV_PROXY=1` instead of undici | Node 22.21+ built-in covers both `fetch()` and `https.request()`. Zero plugin code. |
-| Username enforcement (`user === upn`) | npm login allows arbitrary usernames. Without this, audit logs can be spoofed. |
-| Self-healing discovery with exponential backoff | Transient network failures at startup don't permanently brick the plugin. |
-| Diagnostics separated from auth boundary | `detectSwappedIds` and `enrichJoseError` only run post-verification, for logging. Never in auth decisions. |
-| Shared `discoverOidc` between plugin and check-config | Zero duplicated network logic. Changes to authority resolution are automatically reflected in pre-flight tool. |
+| Decision                                              | Why                                                                                                                                           |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jose` instead of `jsonwebtoken` + `jwks-rsa`         | Web Crypto native, typed error codes, `createRemoteJWKSet` handles JWKS caching/rotation/rate-limiting. Eliminates manual OIDC state machine. |
+| AuthN only — no authz hooks                           | Verdaccio handles authorization natively from `authenticate()` groups. Custom hooks broke user-level access.                                  |
+| OIDC discovery instead of hardcoded URLs              | Supports sovereign clouds (US Gov, China) without code changes.                                                                               |
+| `NODE_USE_ENV_PROXY=1` instead of undici              | Node 22.21+ built-in covers both `fetch()` and `https.request()`. Zero plugin code.                                                           |
+| Username enforcement (`user === upn`)                 | npm login allows arbitrary usernames. Without this, audit logs can be spoofed.                                                                |
+| Self-healing discovery with exponential backoff       | Transient network failures at startup don't permanently brick the plugin.                                                                     |
+| Diagnostics separated from auth boundary              | `detectSwappedIds` and `enrichJoseError` only run post-verification, for logging. Never in auth decisions.                                    |
+| Shared `discoverOidc` between plugin and check-config | Zero duplicated network logic. Changes to authority resolution are automatically reflected in pre-flight tool.                                |
 
 ### Adversarial audit cycle
 
 We ran **8 adversarial oracle audits** across the session. Each audit found real issues that we fixed:
 
-| Audit | Key Findings Fixed |
-|---|---|
-| 1 (initial) | Zero tests, version mismatch, hardcoded paths, dead code, `noImplicitAny: false` |
-| 2 | String-matching library errors, `as unknown as` type hack, `adduser` semantic confusion |
-| 3 | Pre-checking unverified JWT claims before signature verification, helpdesk code in auth path |
-| 4 | Hardcoded Azure public cloud URLs, missing JWKS rate limiting |
-| 5 | Swallowed OIDC discovery error, global state mutation (`setGlobalDispatcher`), hardcoded audience prefix |
-| 6 | Custom authz hooks breaking framework, `setGlobalDispatcher` poisoning host process |
-| 7 | Username spoofing via npm login, asymmetric proxy (discovery works, JWKS doesn't), zombie promise |
-| 8 (final) | Legacy JWT stack (`jsonwebtoken`+`jwks-rsa`), DRY violation in check-config, hand-rolled OIDC state machine |
+| Audit       | Key Findings Fixed                                                                                          |
+| ----------- | ----------------------------------------------------------------------------------------------------------- |
+| 1 (initial) | Zero tests, version mismatch, hardcoded paths, dead code, `noImplicitAny: false`                            |
+| 2           | String-matching library errors, `as unknown as` type hack, `adduser` semantic confusion                     |
+| 3           | Pre-checking unverified JWT claims before signature verification, helpdesk code in auth path                |
+| 4           | Hardcoded Azure public cloud URLs, missing JWKS rate limiting                                               |
+| 5           | Swallowed OIDC discovery error, global state mutation (`setGlobalDispatcher`), hardcoded audience prefix    |
+| 6           | Custom authz hooks breaking framework, `setGlobalDispatcher` poisoning host process                         |
+| 7           | Username spoofing via npm login, asymmetric proxy (discovery works, JWKS doesn't), zombie promise           |
+| 8 (final)   | Legacy JWT stack (`jsonwebtoken`+`jwks-rsa`), DRY violation in check-config, hand-rolled OIDC state machine |
 
 ### Anti-pattern guardrails (12 tests)
 
 Source-scanning tests that break the build if anyone regresses:
 
-| Principle | What's banned |
-|---|---|
-| Process isolation | Global state mutation, `process.env` writes, `console.log` |
-| Proxy safety | `undici` imports (use `NODE_USE_ENV_PROXY=1`) |
-| Crypto stack | `jsonwebtoken` and `jwks-rsa` imports (use `jose`) |
-| Framework compliance | AuthZ hooks, `adduser` |
-| Cryptographic hygiene | String-matching dependency error messages |
-| Type safety | `as unknown as` double-casting |
-| Portability | Hardcoded cloud URLs, absolute filesystem paths |
-| Identity enforcement | Must verify `user === upn` (username spoofing) |
-| Error handling | Catch blocks must escalate or be marked diagnostic |
+| Principle             | What's banned                                              |
+| --------------------- | ---------------------------------------------------------- |
+| Process isolation     | Global state mutation, `process.env` writes, `console.log` |
+| Proxy safety          | `undici` imports (use `NODE_USE_ENV_PROXY=1`)              |
+| Crypto stack          | `jsonwebtoken` and `jwks-rsa` imports (use `jose`)         |
+| Framework compliance  | AuthZ hooks, `adduser`                                     |
+| Cryptographic hygiene | String-matching dependency error messages                  |
+| Type safety           | `as unknown as` double-casting                             |
+| Portability           | Hardcoded cloud URLs, absolute filesystem paths            |
+| Identity enforcement  | Must verify `user === upn` (username spoofing)             |
+| Error handling        | Catch blocks must escalate or be marked diagnostic         |
 
 ### Test suite
 
@@ -107,16 +108,16 @@ Source-scanning tests that break the build if anyone regresses:
 
 ### Dependencies (final)
 
-| Dep | Type | Purpose |
-|---|---|---|
-| `jose` | production | JWT verification, JWKS, Web Crypto |
-| `@verdaccio/core` | production | Plugin base class, error utilities |
-| `debug` | production | Debug logging |
-| `vitest` + `@vitest/coverage-v8` | dev | Test runner + coverage |
-| `eslint` + `typescript-eslint` | dev | Linting with SDL banned functions |
-| `typescript` | dev | Type checking |
-| `tsx` | dev | Run scripts directly |
-| `@changesets/cli` | dev | Release management |
+| Dep                              | Type       | Purpose                            |
+| -------------------------------- | ---------- | ---------------------------------- |
+| `jose`                           | production | JWT verification, JWKS, Web Crypto |
+| `@verdaccio/core`                | production | Plugin base class, error utilities |
+| `debug`                          | production | Debug logging                      |
+| `vitest` + `@vitest/coverage-v8` | dev        | Test runner + coverage             |
+| `eslint` + `typescript-eslint`   | dev        | Linting with SDL banned functions  |
+| `typescript`                     | dev        | Type checking                      |
+| `tsx`                            | dev        | Run scripts directly               |
+| `@changesets/cli`                | dev        | Release management                 |
 
 ### CI/CD pipeline
 
@@ -134,12 +135,14 @@ dependabot.yml:   weekly npm + GitHub Actions updates
 ### SDL compliance
 
 Full assessment against all 115 Microsoft SDL requirements:
+
 - **76 satisfied** with evidence
 - **19 justified N/A** with Microsoft Learn citations
 - **22 documented as organizational** responsibilities
 - **0 gaps**
 
 Aligned with:
+
 - [Verdaccio Best Practices](https://verdaccio.org/docs/best) — all 11 recommendations
 - [Verdaccio Auth Plugin Docs](https://verdaccio.org/docs/plugin-auth) — correct callback contract
 - [Verdaccio Docker Docs](https://verdaccio.org/docs/docker) — multi-stage build, `$VERDACCIO_USER_UID`
@@ -151,23 +154,23 @@ Aligned with:
 
 ### What was deleted
 
-| Deleted | Why |
-|---|---|
-| `docker/start.ts` (27 lines) | Custom entrypoint — standard Verdaccio entrypoint handles everything |
-| `jsonwebtoken` + `jwks-rsa` deps | Replaced by `jose` (Web Crypto, typed errors, built-in JWKS caching) |
-| `undici` dep | `NODE_USE_ENV_PROXY=1` handles proxy natively |
-| `allow_access/publish/unpublish` | Verdaccio handles authz natively |
-| `adduser` | External IdP has no registration concept |
-| `resolveEnv` | Read `process.env` directly |
-| `allowedGroups` config field | Dead code, never read |
-| `@verdaccio/config` dependency | Never imported |
-| `PackageAccessWithUnpublish` type | No longer needed without authz hooks |
-| `JwksServiceError` class | Replaced by jose's `JWKSNoMatchingKey` |
-| `_initWithRetry` OIDC state machine | Simplified — jose handles JWKS lifecycle, only initial OIDC discovery retries |
-| Pre-verify claim checks | jose's `jwtVerify` does signature + claims atomically |
-| String-matching library errors | jose has typed error codes (`err.code`, `err.claim`) |
-| `setGlobalDispatcher` | Plugin must not mutate host process state |
-| Duplicated OIDC logic in check-config | Now imports shared `discoverOidc` |
+| Deleted                               | Why                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `docker/start.ts` (27 lines)          | Custom entrypoint — standard Verdaccio entrypoint handles everything          |
+| `jsonwebtoken` + `jwks-rsa` deps      | Replaced by `jose` (Web Crypto, typed errors, built-in JWKS caching)          |
+| `undici` dep                          | `NODE_USE_ENV_PROXY=1` handles proxy natively                                 |
+| `allow_access/publish/unpublish`      | Verdaccio handles authz natively                                              |
+| `adduser`                             | External IdP has no registration concept                                      |
+| `resolveEnv`                          | Read `process.env` directly                                                   |
+| `allowedGroups` config field          | Dead code, never read                                                         |
+| `@verdaccio/config` dependency        | Never imported                                                                |
+| `PackageAccessWithUnpublish` type     | No longer needed without authz hooks                                          |
+| `JwksServiceError` class              | Replaced by jose's `JWKSNoMatchingKey`                                        |
+| `_initWithRetry` OIDC state machine   | Simplified — jose handles JWKS lifecycle, only initial OIDC discovery retries |
+| Pre-verify claim checks               | jose's `jwtVerify` does signature + claims atomically                         |
+| String-matching library errors        | jose has typed error codes (`err.code`, `err.claim`)                          |
+| `setGlobalDispatcher`                 | Plugin must not mutate host process state                                     |
+| Duplicated OIDC logic in check-config | Now imports shared `discoverOidc`                                             |
 
 ### Commits (chronological)
 

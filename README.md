@@ -26,8 +26,8 @@ Add to your Verdaccio `config.yaml` (see [best practices](https://verdaccio.org/
 ```yaml
 auth:
   entra:
-    clientId: "your-client-id"   # or ENTRA_CLIENT_ID env var
-    tenantId: "your-tenant-id"   # or ENTRA_TENANT_ID env var
+    clientId: "your-client-id" # or ENTRA_CLIENT_ID env var
+    tenantId: "your-tenant-id" # or ENTRA_TENANT_ID env var
     # audience: "api://your-client-id"     # or ENTRA_AUDIENCE (default: api://{clientId})
     # authority: "https://login.microsoftonline.us"  # or ENTRA_AUTHORITY (default: public cloud)
     # maxTokenBytes: 256000               # default: 256,000 bytes (matches Microsoft's DefaultMaximumTokenSizeInBytes)
@@ -70,14 +70,14 @@ security:
 
 All config values can be overridden via environment variables (takes precedence over config.yaml):
 
-| Env Variable | Config Key | Default | Description |
-|---|---|---|---|
-| `ENTRA_CLIENT_ID` | `clientId` | — | Application (client) ID from Entra app registration |
-| `ENTRA_TENANT_ID` | `tenantId` | — | Directory (tenant) ID |
-| `ENTRA_AUDIENCE` | `audience` | `api://{clientId}` | Expected token audience (override for custom App ID URIs) |
-| `ENTRA_AUTHORITY` | `authority` | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud)) |
-| `ENTRA_FAIL_CLOSED` | `failClosed` | `false` | Kill process on config error (`true` = `process.exit(1)`) |
-| `ENTRA_ALLOW_GROUP_OVERAGE` | `allowGroupOverage` | `false` | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
+| Env Variable                | Config Key          | Default                             | Description                                                                                                                                           |
+| --------------------------- | ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENTRA_CLIENT_ID`           | `clientId`          | —                                   | Application (client) ID from Entra app registration                                                                                                   |
+| `ENTRA_TENANT_ID`           | `tenantId`          | —                                   | Directory (tenant) ID                                                                                                                                 |
+| `ENTRA_AUDIENCE`            | `audience`          | `api://{clientId}`                  | Expected token audience (override for custom App ID URIs)                                                                                             |
+| `ENTRA_AUTHORITY`           | `authority`         | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud))                           |
+| `ENTRA_FAIL_CLOSED`         | `failClosed`        | `false`                             | Kill process on config error (`true` = `process.exit(1)`)                                                                                             |
+| `ENTRA_ALLOW_GROUP_OVERAGE` | `allowGroupOverage` | `false`                             | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
 
 ### Proxy Support
 
@@ -136,12 +136,12 @@ This auto-detects your package manager, configures scoped registries, and authen
 
 ## Verdaccio Version Compatibility
 
-| Verdaccio | Status | Docker Tag | This Plugin |
-|-----------|--------|------------|-------------|
-| 6.x | Current stable | `verdaccio/verdaccio:6` | Fully aligned (runtime + deps) |
-| 7.x | Abandoned | — | Untested |
-| 8.x | Skipped | — | No release, no Docker image |
-| 9.x | Experimental | `nightly-master` | Requires Node 24, untested |
+| Verdaccio | Status         | Docker Tag              | This Plugin                    |
+| --------- | -------------- | ----------------------- | ------------------------------ |
+| 6.x       | Current stable | `verdaccio/verdaccio:6` | Fully aligned (runtime + deps) |
+| 7.x       | Abandoned      | —                       | Untested                       |
+| 8.x       | Skipped        | —                       | No release, no Docker image    |
+| 9.x       | Experimental   | `nightly-master`        | Requires Node 24, untested     |
 
 All npm dependencies (`@verdaccio/core`, `@verdaccio/types`, `@verdaccio/auth`) target v6.
 The auth plugin interface (`pluginUtils.Auth<T>`) is identical across v6/v8/v9.
