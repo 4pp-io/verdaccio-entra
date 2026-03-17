@@ -91,7 +91,7 @@ export const EntraTokenPayloadSchema = v.looseObject({
   groups: v.optional(v.array(v.string())),
   roles: v.optional(v.array(v.string())),
   hasgroups: v.optional(v.boolean()),
-  _claim_names: v.optional(v.looseObject({})),
+  _claim_names: v.optional(v.looseObject({ groups: v.optional(v.string()) })),
 });
 
 /** Claims used by the plugin from a validated Entra ID access token. */

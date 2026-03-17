@@ -21,7 +21,7 @@ Entra `groups` claims contain opaque GUIDs. [App Roles](https://learn.microsoft.
 - Deploy behind a reverse proxy with TLS termination and rate limiting
 - Verdaccio's JWT `secret` must be at least 32 characters
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection
-- Tokens exceeding `maxTokenBytes` (default: 256KB) are rejected before JWT parsing
+- Tokens exceeding `maxTokenBytes` (default: 256,000 bytes) are rejected before JWT parsing
 - JWKS keys are cached with a 30-second cooldown between refetches (jose default)
 - Rotating the Verdaccio `secret` invalidates all existing client tokens
 
