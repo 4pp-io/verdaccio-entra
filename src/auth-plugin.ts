@@ -151,11 +151,11 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const msg = err instanceof Error ? err.message : String(err);
 			this._logger.error(
 				{},
-				"FATAL: verdaccio-entra failed to initialize — Verdaccio will continue WITHOUT authentication. " +
-					"All packages may be publicly accessible. Fix the configuration and restart. " +
+				"FATAL: verdaccio-entra failed to initialize. Crashing process to prevent Verdaccio from booting without authentication. " +
+					"Fix the configuration and restart. " +
 					"Error: " + msg,
 			);
-			throw err;
+			process.exit(1);
 		}
 
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };

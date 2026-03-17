@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
@@ -85,20 +85,36 @@ function authenticateAsync(plugin: EntraPlugin, user: string, password: string):
 // ---- Tests ----
 
 describe("EntraPlugin constructor", () => {
+	let exitSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		exitSpy = vi.spyOn(process, "exit").mockImplementation(((code) => {
+			throw new Error(`process.exit called with ${code}`);
+		}) as never);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("creates successfully with valid GUIDs", () => {
 		expect(() => createPlugin()).not.toThrow();
+		expect(exitSpy).not.toHaveBeenCalled();
 	});
 
-	it("throws on invalid clientId", () => {
-		expect(() => createPlugin({ clientId: "not-a-guid" })).toThrow(/Invalid clientId/);
+	it("calls process.exit(1) on invalid clientId", () => {
+		expect(() => createPlugin({ clientId: "not-a-guid" })).toThrow(/process\.exit called with 1/);
+		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 
-	it("throws on invalid tenantId", () => {
-		expect(() => createPlugin({ tenantId: "not-a-guid" })).toThrow(/Invalid tenantId/);
+	it("calls process.exit(1) on invalid tenantId", () => {
+		expect(() => createPlugin({ tenantId: "not-a-guid" })).toThrow(/process\.exit called with 1/);
+		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 
-	it("throws on empty clientId", () => {
-		expect(() => createPlugin({ clientId: "" })).toThrow(/Invalid clientId/);
+	it("calls process.exit(1) on empty clientId", () => {
+		expect(() => createPlugin({ clientId: "" })).toThrow(/process\.exit called with 1/);
+		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 
 	it("env vars override config values", () => {
@@ -106,6 +122,7 @@ describe("EntraPlugin constructor", () => {
 		process.env.ENTRA_TENANT_ID = TEST_TENANT;
 		try {
 			expect(() => createPlugin({ clientId: "placeholder", tenantId: "placeholder" })).not.toThrow();
+			expect(exitSpy).not.toHaveBeenCalled();
 		} finally {
 			delete process.env.ENTRA_CLIENT_ID;
 			delete process.env.ENTRA_TENANT_ID;
