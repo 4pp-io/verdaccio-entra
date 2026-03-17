@@ -85,6 +85,8 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 			.start();
 
 		// Start Verdaccio with the plugin
+		// Use HTTP health check instead of log message matching — log strings
+		// change during refactors and cause silent 90-second timeout failures.
 		verdaccio = await verdaccioImage
 			.withNetwork(network)
 			.withExposedPorts(4873)
@@ -94,22 +96,12 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 				ENTRA_AUTHORITY: "http://mock-jwks:9877",
 			})
 			.withLogConsumer(logConsumer("verdaccio"))
-			.withWaitStrategy(Wait.forLogMessage("EntraPlugin ready"))
+			.withWaitStrategy(Wait.forHttp("/-/ping", 4873, { abortOnContainerExit: true }))
 			.withStartupTimeout(60_000)
 			.start();
 
 		const port = verdaccio.getMappedPort(4873);
 		verdaccioUrl = `http://${verdaccio.getHost()}:${port}`;
-
-		// Wait for HTTP ready
-		const start = Date.now();
-		while (Date.now() - start < 15_000) {
-			try {
-				const res = await fetch(`${verdaccioUrl}/-/ping`);
-				if (res.ok) break;
-			} catch { /* retry */ }
-			await new Promise((r) => setTimeout(r, 500));
-		}
 	}, 90_000);
 
 	afterAll(async () => {

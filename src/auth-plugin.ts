@@ -59,6 +59,27 @@ export function jwksUri(tenantId: string, authority = DEFAULT_AUTHORITY): string
 	return `${authority}/${tenantId}/discovery/v2.0/keys`;
 }
 
+/**
+ * Runtime shape guard for the Entra token payload after jose signature verification.
+ * Validates that identity and group claims — if present — have the expected types.
+ * Catches unexpected Microsoft token shape changes that a bare type assertion would hide.
+ */
+function assertEntraPayload(payload: JWTPayload): EntraTokenPayload {
+	const optStr: (keyof EntraTokenPayload)[] = ["preferred_username", "upn", "email", "oid", "sub"];
+	for (const key of optStr) {
+		if (key in payload && typeof payload[key] !== "string") {
+			throw new Error(`Unexpected token shape: claim "${key}" is ${typeof payload[key]}, expected string`);
+		}
+	}
+	const optArr: (keyof EntraTokenPayload)[] = ["groups", "roles"];
+	for (const key of optArr) {
+		if (key in payload && !Array.isArray(payload[key])) {
+			throw new Error(`Unexpected token shape: claim "${key}" is ${typeof payload[key]}, expected array`);
+		}
+	}
+	return payload as EntraTokenPayload;
+}
+
 /** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */
 function assertGuid(value: string, label: string): void {
 	if (!value || !GUID_RE.test(value)) {
@@ -92,10 +113,15 @@ export function resolveConfig(
 	const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
 
 	if (logger) {
-		if (env["ENTRA_CLIENT_ID"]) logger.info({}, "clientId overridden by ENTRA_CLIENT_ID env var");
-		if (env["ENTRA_TENANT_ID"]) logger.info({}, "tenantId overridden by ENTRA_TENANT_ID env var");
-		if (env["ENTRA_AUTHORITY"]) logger.info({}, "authority overridden by ENTRA_AUTHORITY env var");
-		if (env["ENTRA_AUDIENCE"]) logger.info({}, "audience overridden by ENTRA_AUDIENCE env var");
+		const overrides = [
+			env["ENTRA_CLIENT_ID"] && "clientId",
+			env["ENTRA_TENANT_ID"] && "tenantId",
+			env["ENTRA_AUTHORITY"] && "authority",
+			env["ENTRA_AUDIENCE"] && "audience",
+		].filter(Boolean);
+		if (overrides.length > 0) {
+			logger.info({ overrides: overrides.join(", ") }, "entra: config fields overridden by env vars: @{overrides}");
+		}
 	}
 
 	assertGuid(clientId, "clientId");
@@ -120,12 +146,15 @@ export function warnIfProxyMisconfigured(
 	const hasProxy = env["HTTPS_PROXY"] || env["HTTP_PROXY"] || env["https_proxy"] || env["http_proxy"];
 	const hasFlag = env["NODE_USE_ENV_PROXY"];
 	if (hasProxy && !hasFlag) {
-		logger.error(
-			{},
-			"HTTPS_PROXY or HTTP_PROXY is set but NODE_USE_ENV_PROXY is not. " +
-				"Node's native fetch (used by jose for JWKS key fetching) will IGNORE your proxy. " +
-				"Set NODE_USE_ENV_PROXY=1 in your container/environment to enable proxy support. " +
-				"See https://nodejs.org/en/learn/http/enterprise-network-configuration",
+		const vars = [
+			env["HTTPS_PROXY"] && "HTTPS_PROXY",
+			env["HTTP_PROXY"] && "HTTP_PROXY",
+			env["https_proxy"] && "https_proxy",
+			env["http_proxy"] && "http_proxy",
+		].filter(Boolean).join(", ");
+		logger.warn(
+			{ vars, fix: "set NODE_USE_ENV_PROXY=1" },
+			"entra: proxy env vars (@{vars}) detected but Node will ignore them without NODE_USE_ENV_PROXY=1",
 		);
 	}
 }
@@ -136,7 +165,7 @@ export function warnIfProxyMisconfigured(
  *
  * Uses the `jose` library (Web Crypto, zero deps) for JWT verification
  * with `createRemoteJWKSet` handling JWKS caching, key rotation, and
- * rate-limited refetching automatically.
+ * cooldown-gated refetching (30s default) automatically.
  *
  * This plugin is strictly AuthN. Verdaccio handles AuthZ natively from
  * the groups returned by `authenticate`.
@@ -164,28 +193,23 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const msg = err instanceof Error ? err.message : String(err);
 			const envFailClosed = process.env["ENTRA_FAIL_CLOSED"];
 			const failClosed = envFailClosed !== undefined ? envFailClosed === "true" : (config.failClosed ?? false);
-			
-			// ADVERSARIAL ORACLE NOTE: 
-			// Verdaccio's plugin-async-loader.js blindly catches ALL constructor exceptions 
-			// (Error, TypeError, strings, etc.) using a generic catch block, logs a warning, 
-			// and cheerfully boots up the registry without this plugin. This is a massive "fail open" 
-			// security risk. Using process.exit(1) here is self-defense against a framework that 
-			// actively sabotages the security perimeter.
+
+			// Verdaccio's plugin-async-loader.js catches all constructor exceptions
+			// and continues booting without the plugin. This means a config error
+			// silently disables Entra auth, falling back to htpasswd or no auth.
+			// process.exit(1) is the only way to enforce "fail closed" behavior
+			// given the framework's error handling.
+			// @see https://github.com/verdaccio/verdaccio/blob/master/packages/loaders/src/plugin-async-loader.ts
 			if (failClosed) {
 				this._logger.error(
-					{},
-					"FATAL: verdaccio-entra failed to initialize (failClosed=true). " +
-						"Killing process to prevent Verdaccio from booting without Entra auth. " +
-						"Error: " + msg,
+					{ err: msg, failClosed: true },
+					"entra: init failed with failClosed=true, killing process — @{err}",
 				);
 				process.exit(1);
 			}
 			this._logger.error(
-				{},
-				"verdaccio-entra failed to initialize and will be skipped. " +
-					"Verdaccio will fall back to other auth plugins (e.g. htpasswd). " +
-					"Set failClosed: true in config to kill the process instead. " +
-					"Error: " + msg,
+				{ err: msg, failClosed: false },
+				"entra: init failed, plugin will be skipped (set failClosed:true to abort) — @{err}",
 			);
 			throw new Error("verdaccio-entra: " + msg, { cause: err });
 		}
@@ -204,10 +228,10 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 		warnIfProxyMisconfigured(this._logger);
 
 		this._logger.info(
-			{ issuer: this._issuer, jwks: jwksUri(resolved.tenantId, resolved.authority) },
-			"EntraPlugin ready — issuer: @{issuer}",
+			{ issuer: this._issuer, audience: this._audience, jwks: jwksUri(resolved.tenantId, resolved.authority) },
+			"entra: plugin loaded — issuer=@{issuer} audience=@{audience}",
 		);
-		debug("EntraPlugin ready — issuer: %s, audience: %s", this._issuer, this._audience);
+		debug("plugin loaded — issuer: %s, audience: %s, jwks: %s", this._issuer, this._audience, jwksUri(resolved.tenantId, resolved.authority));
 	}
 
 	/**
@@ -228,15 +252,15 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const payload = await this._validateToken(password);
 			const upn = payload.preferred_username ?? payload.upn ?? payload.email;
 			if (!upn) {
-				this._logger.error({ user }, "Token has no identity claim (preferred_username, upn, email)");
+				this._logger.warn({ user }, "entra: auth rejected — token has no identity claim (preferred_username/upn/email)");
 				cb(null, false);
 				return;
 			}
 
 			if (user.toLowerCase() !== upn.toLowerCase()) {
 				this._logger.warn(
-					{ provided: user, actual: upn },
-					"Username mismatch: npm login username '@{provided}' does not match Entra identity '@{actual}'",
+					{ npmUser: user, entraUser: upn },
+					"entra: auth rejected — npm username @{npmUser} does not match token identity @{entraUser}",
 				);
 				cb(errorUtils.getUnauthorized(
 					`Username "${user}" does not match Entra identity "${upn}". ` +
@@ -246,13 +270,13 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			}
 
 			const groups = this._extractGroups(payload);
-			this._logger.info({ user: upn }, "User @{user} authenticated via Entra ID");
-			debug("User %s authenticated, groups: %o", upn, groups);
+			this._logger.info({ user: upn, groups: groups.length }, "entra: auth ok user=@{user} groups=@{groups}");
+			debug("auth ok user=%s groups=%o", upn, groups);
 			cb(null, groups);
 		})().catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
-			this._logger.warn({ user, err: msg, issuer: this._issuer, audience: this._audience }, "Entra auth failed for @{user}: @{err}");
-			debug("Authentication failed for %s: %s", user, msg);
+			this._logger.warn({ user, err: msg }, "entra: auth failed user=@{user} — @{err}");
+			debug("auth failed user=%s err=%s", user, msg);
 			cb(null, false);
 		});
 	}
@@ -276,18 +300,18 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				audience: this._audience,
 				clockTolerance: DEFAULT_CLOCK_TOLERANCE_SECONDS, // @see DEFAULT_CLOCK_TOLERANCE_SECONDS
 			});
-			return payload as EntraTokenPayload;
+			return assertEntraPayload(payload);
 		} catch (err) {
 			// Enrich with diagnostics (swap detection, friendly messages) — post-verify only
 			throw new Error(enrichJoseError(err, token, this._entraConfig));
 		}
 	}
 
-	private _extractGroups(payload: JWTPayload): string[] {
+	private _extractGroups(payload: EntraTokenPayload): string[] {
 		const groups = [
 			"$authenticated",
-			...this._extractStringArray(payload["groups"]),
-			...this._extractStringArray(payload["roles"]),
+			...this._extractStringArray(payload.groups),
+			...this._extractStringArray(payload.roles),
 		];
 
 		// Entra omits the groups claim when user has >200 group memberships.
@@ -300,18 +324,15 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			typeof claimNames === "object" &&
 			!Array.isArray(claimNames) &&
 			"groups" in (claimNames as Record<string, unknown>);
-		
+
 		const hasLegacyGroupOverage =
-			payload["hasgroups"] === true && payload["groups"] === undefined;
+			payload["hasgroups"] === true && payload.groups === undefined;
 
 		if (hasClaimNamesGroupOverage || hasLegacyGroupOverage) {
-			const user = payload["preferred_username"] ?? payload["upn"] ?? "unknown";
-			this._logger.error(
-				{ user },
-				"Entra group overage detected for @{user}: token has >200 group memberships and Entra omitted the groups claim. " +
-					"Mitigation: configure the app registration to emit groups as roles, " +
-					"or use application roles instead of security groups. " +
-					"See https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference",
+			const user = payload.preferred_username ?? payload.upn ?? "unknown";
+			this._logger.warn(
+				{ user, overage: true, allowGroupOverage: this._allowGroupOverage },
+				"entra: group overage for @{user} — token has >200 groups, groups claim omitted by Entra",
 			);
 			if (!this._allowGroupOverage) {
 				throw new Error(

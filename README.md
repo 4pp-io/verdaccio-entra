@@ -4,7 +4,7 @@ Microsoft Entra ID (Azure AD) auth plugin for [Verdaccio](https://verdaccio.org/
 
 ## Features
 
-- Validates Entra ID access tokens using JWKS (RS256) with rate-limited key fetching
+- Validates Entra ID access tokens using JWKS (RS256) with automatic key caching and rotation via [jose](https://github.com/panva/jose)
 - Sovereign cloud support (Azure Public, US Government, China) via configurable `authority` URL
 - Username enforcement — npm login username must match Entra identity (anti-spoofing)
 - Group and role-based access control from JWT claims (Verdaccio handles authorization natively)
@@ -159,7 +159,7 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 - **Prefer App Roles over Groups:** Entra ID `groups` claims contain opaque GUIDs (Object IDs), making `config.yaml` unreadable. [App Roles](https://learn.microsoft.com/entra/identity-platform/howto-add-app-roles-in-apps) emit human-readable strings in the `roles` claim (e.g., `Package.Publisher`). Microsoft [recommends App Roles](https://learn.microsoft.com/security/zero-trust/develop/configure-tokens-group-claims-app-roles#groups-and-app-roles) over groups for application authorization. Both are supported — the plugin merges `groups` and `roles` into the array returned to Verdaccio
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection
 - Token payloads exceeding 256,000 bytes (configurable via `maxTokenBytes`) are rejected before JWT parsing
-- JWKS key fetching is rate-limited (10 req/min) to prevent kid-spoofing DoS
+- JWKS keys are cached and only refetched on cache miss, with a 30-second cooldown between fetches (jose's `createRemoteJWKSet` default) to limit abuse from unknown `kid` values
 - Rotating the Verdaccio `secret` invalidates all existing client tokens (forces re-login)
 - **Corporate proxy:** Node's native `fetch` (used for JWKS key fetching) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
 

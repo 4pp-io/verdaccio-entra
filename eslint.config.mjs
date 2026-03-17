@@ -35,6 +35,12 @@ export default tseslint.config(
 				assertionStyle: "as",
 				objectLiteralTypeAssertions: "never",
 			}],
+
+			// --- Ban `as never` — use properly typed mocks or narrower assertions ---
+			"no-restricted-syntax": ["error", {
+				selector: "TSAsExpression > TSNeverKeyword",
+				message: "Do not use 'as never'. Use a properly typed mock or a narrower type assertion.",
+			}],
 		},
 	},
 	// --- CLI entry point: console is expected ---
