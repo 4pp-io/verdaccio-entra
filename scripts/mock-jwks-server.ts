@@ -22,13 +22,11 @@ async function main() {
   const keysJson = JSON.stringify({ privateJwk, kid: KID });
 
   const server = createServer((req, res) => {
-    const sanitizedUrl = req.url?.replace(/[\r\n]/g, "") || "";
-    const sanitizedMethod = req.method?.replace(/[\r\n]/g, "") || "";
-    console.log("%s %s", sanitizedMethod, sanitizedUrl);
-    if (sanitizedUrl.includes("discovery/v2.0/keys")) {
+    console.log("%s %s", req.method, req.url);
+    if (req.url?.includes("discovery/v2.0/keys")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(jwksJson);
-    } else if (sanitizedUrl === "/_test/keys.json") {
+    } else if (req.url === "/_test/keys.json") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(keysJson);
     } else {

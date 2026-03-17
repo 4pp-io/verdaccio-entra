@@ -17,7 +17,6 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - name: Checkout Repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -42,13 +41,16 @@ jobs:
           commitMode: github-api
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Set required statuses on Version Packages PR
         if: steps.changesets.outputs.hasChangesets == 'true'
         run: |
+          # Use GH_TOKEN for authenticated API calls
           PR_SHA=$(gh pr view changeset-release/main --json headRefOid --jq '.headRefOid' 2>/dev/null) || exit 0
 
-          # Only stamp if the PR exclusively touches version/changelog files
+          # Strict check: Only stamp if the PR exclusively touches version/changelog files
+          # This prevents malicious scripts in package.json from sneaking in
           CHANGED=$(gh pr diff changeset-release/main --name-only 2>/dev/null) || exit 0
           while IFS= read -r file; do
             case "$file" in
@@ -57,6 +59,7 @@ jobs:
             esac
           done <<< "$CHANGED"
 
+          # Use environment variables for API calls
           for context in build-and-test secret-scanning; do
             gh api "/repos/$GITHUB_REPOSITORY/statuses/${PR_SHA}" \
               -f state=success \
