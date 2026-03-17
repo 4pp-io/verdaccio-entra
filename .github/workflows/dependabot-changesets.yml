@@ -22,7 +22,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Add changeset
-        uses: mscharley/dependency-changesets-action@v1
+        uses: mscharley/dependency-changesets-action@v1.2.3
         with:
           # GitHub Actions normally restricts the default GITHUB_TOKEN on `pull_request` events
           # from forks/Dependabot. Using `pull_request_target` solves this, but we MUST ensure
