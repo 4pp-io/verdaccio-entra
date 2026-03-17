@@ -59,7 +59,7 @@ let verdaccioUrl: string;
 function logConsumer(prefix: string) {
   return (stream: NodeJS.ReadableStream) => {
     stream.on("data", (line: string) => console.log(`[${prefix}] ${line.trimEnd()}`));
-    stream.on("err", (line: string) => console.error(`[${prefix}] ${line.trimEnd()}`));
+    stream.on("error", (err: Error) => console.error(`[${prefix}] ${err.message}`));
   };
 }
 
