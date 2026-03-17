@@ -39,8 +39,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL"
 
-      - name: Enable auto-merge for devDependencies
-        if: contains(github.event.workflow_run.head_branch, '/dev-dependencies')
+      - name: Enable auto-merge
         env:
           PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
