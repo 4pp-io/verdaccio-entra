@@ -1,23 +1,32 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import type { MockInstance } from "vitest";
+import type { Logger } from "@verdaccio/types";
+import type { pluginUtils } from "@verdaccio/core";
 
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
+import type { EntraConfig } from "../../types/index";
 import { TEST_TENANT, TEST_CLIENT, TEST_KID, entraV2Claims } from "./fixtures";
 import { DEFAULT_MAX_TOKEN_BYTES, AUDIENCE_PREFIX, resolveConfig, warnIfProxyMisconfigured } from "../auth-plugin";
 
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
 
+// --- Mock fetch: serves JWKS endpoint for jose's createRemoteJWKSet ---
+const originalFetch = globalThis.fetch;
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
 beforeAll(async () => {
 	const pair = await generateKeyPair("RS256");
 	privateKey = pair.privateKey;
 	publicJwk = { ...(await exportJWK(pair.publicKey)), kid: TEST_KID, use: "sig", alg: "RS256" };
+	setFetchSuccess();
 });
 
-// --- Mock fetch: serves JWKS endpoint for jose's createRemoteJWKSet ---
-const mockFetch = vi.fn();
-vi.stubGlobal("fetch", mockFetch);
+afterAll(() => {
+	vi.stubGlobal("fetch", originalFetch);
+});
 
 function setFetchSuccess(): void {
 	mockFetch.mockImplementation((input: string | URL | Request) => {
@@ -34,8 +43,6 @@ function setFetchSuccess(): void {
 	});
 }
 
-setFetchSuccess();
-
 async function signToken(
 	claims: Record<string, unknown>,
 	options?: { expiresIn?: string; kid?: string; alg?: string },
@@ -51,13 +58,14 @@ async function signToken(
 
 import EntraPlugin from "../auth-plugin";
 
-function createPlugin(configOverrides?: Record<string, unknown>): EntraPlugin {
+function mockLogger(): Logger {
+	return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() };
+}
+
+function createPlugin(configOverrides?: Partial<EntraConfig>): EntraPlugin {
 	return new EntraPlugin(
-		{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, ...configOverrides } as never,
-		{
-			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() },
-			config: {},
-		} as never,
+		{ clientId: TEST_CLIENT, tenantId: TEST_TENANT, ...configOverrides },
+		{ logger: mockLogger(), config: {} } as pluginUtils.PluginOptions,
 	);
 }
 
@@ -92,7 +100,7 @@ describe("EntraPlugin constructor", () => {
 	it("calls process.exit(1) when failClosed is true", () => {
 		const exitSpy: MockInstance = vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new Error("process.exit called");
-		}) as never);
+		}) as () => never);
 		try {
 			expect(() => createPlugin({ clientId: "not-a-guid", failClosed: true })).toThrow(/process\.exit/);
 			expect(exitSpy).toHaveBeenCalledWith(1);
@@ -167,25 +175,25 @@ describe("resolveConfig", () => {
 
 describe("warnIfProxyMisconfigured", () => {
 	it("warns when HTTPS_PROXY is set without NODE_USE_ENV_PROXY", () => {
-		const error = vi.fn();
-		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		const warn = vi.fn();
+		const logger: Logger = { ...mockLogger(), warn };
 		warnIfProxyMisconfigured(logger, { HTTPS_PROXY: "http://proxy:8080" });
-		expect(error).toHaveBeenCalledOnce();
-		expect(error.mock.calls[0]?.[1]).toMatch(/NODE_USE_ENV_PROXY/);
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0]?.[1]).toMatch(/NODE_USE_ENV_PROXY/);
 	});
 
 	it("does not warn when NODE_USE_ENV_PROXY is set", () => {
-		const error = vi.fn();
-		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		const warn = vi.fn();
+		const logger: Logger = { ...mockLogger(), warn };
 		warnIfProxyMisconfigured(logger, { HTTPS_PROXY: "http://proxy:8080", NODE_USE_ENV_PROXY: "1" });
-		expect(error).not.toHaveBeenCalled();
+		expect(warn).not.toHaveBeenCalled();
 	});
 
 	it("does not warn when no proxy vars are set", () => {
-		const error = vi.fn();
-		const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), trace: vi.fn(), child: vi.fn(), http: vi.fn() } as never;
+		const warn = vi.fn();
+		const logger: Logger = { ...mockLogger(), warn };
 		warnIfProxyMisconfigured(logger, {});
-		expect(error).not.toHaveBeenCalled();
+		expect(warn).not.toHaveBeenCalled();
 	});
 });
 
@@ -357,6 +365,36 @@ describe("authenticate", () => {
 		const token = await signToken(entraV2Claims({
 			groups: undefined,
 			hasgroups: true,
+		}));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
+	});
+
+	// --- Shape guard: assertEntraPayload catches wrong claim types ---
+
+	it("rejects token where preferred_username is not a string", async () => {
+		const token = await signToken(entraV2Claims({ preferred_username: 12345 }));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
+	});
+
+	it("rejects token where groups is not an array", async () => {
+		const token = await signToken(entraV2Claims({ groups: "not-an-array" }));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
+	});
+
+	it("rejects token where roles is a string instead of array", async () => {
+		const token = await signToken(entraV2Claims({ roles: "admin" }));
+		const result = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(result).toBe(false);
+	});
+
+	it("rejects token where email is a number", async () => {
+		const token = await signToken(entraV2Claims({
+			preferred_username: undefined,
+			upn: undefined,
+			email: 999,
 		}));
 		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);

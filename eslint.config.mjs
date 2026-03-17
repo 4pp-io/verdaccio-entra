@@ -55,6 +55,11 @@ export default tseslint.config(
 			"@typescript-eslint/no-unsafe-argument": "off",
 			"@typescript-eslint/consistent-type-assertions": "off",
 			"no-console": "off",
+			// Ban `as never` — use proper mock types instead
+			"no-restricted-syntax": ["error", {
+				selector: "TSAsExpression > TSNeverKeyword",
+				message: "Do not use 'as never'. Create properly typed mocks or use a narrower type assertion.",
+			}],
 		},
 	},
 );
