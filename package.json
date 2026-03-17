@@ -27,7 +27,7 @@
     "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.30.0",
     "@types/debug": "4.1.12",
-    "@types/node": "^22.19.15",
+    "@types/node": "^25.5.0",
     "@verdaccio/types": "11.0.0-6-next.25",
     "@vitest/coverage-v8": "^4.1.0",
     "cross-env": "^10.1.0",
