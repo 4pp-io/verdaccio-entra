@@ -17,19 +17,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          # Required for mscharley/dependency-changesets-action to see the PR commit history
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
+      - name: Check if production dependency
+        id: check-prod
+        run: |
+          # Compare dependencies (not devDependencies) between base and head
+          git diff origin/${{ github.event.pull_request.base.ref }}..HEAD -- package.json \
+            | grep -E '^\+.*"(dependencies)"' -A 100 \
+            | grep -E '^\+' | head -20 > /tmp/dep-diff.txt || true
+
+          # Simpler: check if the PR title mentions a production dep
+          PROD_DEPS=$(node -e "
+            const pkg = require('./package.json');
+            console.log(Object.keys(pkg.dependencies || {}).join('|'));
+          ")
+          TITLE="${{ github.event.pull_request.title }}"
+          if echo "$TITLE" | grep -qE "($PROD_DEPS)"; then
+            echo "is_prod=true" >> "$GITHUB_OUTPUT"
+            echo "Production dependency update detected: $TITLE"
+          else
+            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+            echo "devDependency update — skipping changeset: $TITLE"
+          fi
+
       - name: Add changeset
+        if: steps.check-prod.outputs.is_prod == 'true'
         uses: mscharley/dependency-changesets-action@v1.2.3
         with:
-          # GitHub Actions normally restricts the default GITHUB_TOKEN on `pull_request` events
-          # from forks/Dependabot. Using `pull_request_target` solves this, but we MUST ensure
-          # we only run this workflow when the actor is actually Dependabot to prevent pwn requests.
           token: ${{ secrets.GITHUB_TOKEN }}
           use-conventional-commits: true
-          # Note: If Dependabot is configured to rebase PRs automatically, the changeset will be
-          # preserved. However, if the commit is pushed back to the branch by GITHUB_TOKEN,
-          # no further GitHub Actions will trigger (to prevent recursive loops).
-          # For full CI execution on the changeset commit, a PAT (Personal Access Token) is recommended.
