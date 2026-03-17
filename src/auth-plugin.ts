@@ -159,7 +159,7 @@ export function warnIfProxyMisconfigured(
  *
  * Uses the `jose` library (Web Crypto, zero deps) for JWT verification
  * with `createRemoteJWKSet` handling JWKS caching, key rotation, and
- * rate-limited refetching automatically.
+ * cooldown-gated refetching (30s default) automatically.
  *
  * This plugin is strictly AuthN. Verdaccio handles AuthZ natively from
  * the groups returned by `authenticate`.
