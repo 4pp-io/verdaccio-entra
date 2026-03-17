@@ -73,7 +73,7 @@ async function fetchWithRetry(url: string): Promise<Response> {
  * Retries transient failures with exponential back-off.
  * Proxy support via NODE_USE_ENV_PROXY=1 (Node 20.13+/21.7+).
  */
-export async function verifyJwksEndpoint(authority: string, tenantId: string): Promise<boolean> {
+async function verifyJwksEndpoint(authority: string, tenantId: string): Promise<boolean> {
   const url = jwksUri(tenantId, authority);
   const res = await fetchWithRetry(url);
   if (!res.ok) {
@@ -107,7 +107,7 @@ export async function verifyJwksEndpoint(authority: string, tenantId: string): P
   return true;
 }
 
-export interface CheckResult {
+interface CheckResult {
   label: string;
   ok: boolean;
   detail: string;

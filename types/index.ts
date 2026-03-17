@@ -62,6 +62,13 @@ export interface EntraConfig {
    * do not use group-based package ACLs.
    */
   allowGroupOverage?: boolean;
+  /**
+   * Clock skew tolerance for JWT verification (seconds).
+   * Accommodates minor clock drift between the Entra token issuer and
+   * this server. Default: 300 (5 minutes).
+   * @see https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4
+   */
+  clockToleranceSeconds?: number;
 }
 
 import * as v from "valibot";

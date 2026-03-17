@@ -21,20 +21,17 @@ export const TEST_TENANT = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
 /** Microsoft Learn placeholder client (application) ID */
 export const TEST_CLIENT = "00001111-aaaa-2222-bbbb-3333cccc4444";
 
-/** Microsoft's own public tenant — always has a valid JWKS endpoint */
-export const MICROSOFT_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
-
 /** JWKS key ID used in test RSA key pair */
 export const TEST_KID = "test-kid-001";
 
 /** Immutable object ID for the test user (oid claim) */
-export const TEST_USER_OID = "00000000-0000-0000-0000-000000000001";
+const TEST_USER_OID = "00000000-0000-0000-0000-000000000001";
 
 /** Pairwise subject identifier for the test user (sub claim) */
-export const TEST_USER_SUB = "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ";
+const TEST_USER_SUB = "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ";
 
 /** Client app ID of the requesting application (azp claim) */
-export const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
+const TEST_AZP = "22223333-bbbb-4444-cccc-5555dddd6666";
 
 // ---------------------------------------------------------------------------
 // Realistic Entra v2.0 access token claims factory

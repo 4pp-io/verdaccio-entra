@@ -29,7 +29,7 @@ export const AUDIENCE_PREFIX = "api://";
  * Accommodates minor clock drift between token issuer and this server.
  * @see https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4
  */
-export const DEFAULT_CLOCK_TOLERANCE_SECONDS = 300;
+const DEFAULT_CLOCK_TOLERANCE_SECONDS = 300;
 
 /**
  * Default Azure Public cloud authority.
@@ -97,15 +97,30 @@ function assertGuid(value: string, label: string): void {
  *
  * @see https://www.verdaccio.org/docs/env/
  */
+export interface ResolvedConfig {
+  clientId: string;
+  tenantId: string;
+  authority: string;
+  audience: string;
+  failClosed: boolean;
+  allowGroupOverage: boolean;
+  maxTokenBytes: number;
+  clockToleranceSeconds: number;
+}
+
 export function resolveConfig(
   config: EntraConfig,
   env: Record<string, string | undefined> = process.env,
   logger?: Logger,
-): { clientId: string; tenantId: string; authority: string; audience: string } {
+): ResolvedConfig {
   const clientId = env["ENTRA_CLIENT_ID"] ?? config.clientId;
   const tenantId = env["ENTRA_TENANT_ID"] ?? config.tenantId;
   const authority = env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
   const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
+  const failClosed = envBool(env["ENTRA_FAIL_CLOSED"]) ?? config.failClosed ?? false;
+  const allowGroupOverage = envBool(env["ENTRA_ALLOW_GROUP_OVERAGE"]) ?? config.allowGroupOverage ?? false;
+  const maxTokenBytes = envInt(env["ENTRA_MAX_TOKEN_BYTES"]) ?? config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
+  const clockToleranceSeconds = envInt(env["ENTRA_CLOCK_TOLERANCE_SECONDS"]) ?? config.clockToleranceSeconds ?? DEFAULT_CLOCK_TOLERANCE_SECONDS;
 
   if (logger) {
     const overrides = [
@@ -113,6 +128,10 @@ export function resolveConfig(
       env["ENTRA_TENANT_ID"] && "tenantId",
       env["ENTRA_AUTHORITY"] && "authority",
       env["ENTRA_AUDIENCE"] && "audience",
+      env["ENTRA_FAIL_CLOSED"] && "failClosed",
+      env["ENTRA_ALLOW_GROUP_OVERAGE"] && "allowGroupOverage",
+      env["ENTRA_MAX_TOKEN_BYTES"] && "maxTokenBytes",
+      env["ENTRA_CLOCK_TOLERANCE_SECONDS"] && "clockToleranceSeconds",
     ].filter(Boolean);
     if (overrides.length > 0) {
       logger.info(
@@ -124,7 +143,20 @@ export function resolveConfig(
 
   assertGuid(clientId, "clientId");
   assertGuid(tenantId, "tenantId");
-  return { clientId, tenantId, authority, audience };
+  return { clientId, tenantId, authority, audience, failClosed, allowGroupOverage, maxTokenBytes, clockToleranceSeconds };
+}
+
+/** Parse an env var as a boolean ("true"/"false"), or undefined if not set. */
+function envBool(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  return value === "true";
+}
+
+/** Parse an env var as an integer, or undefined if not set or invalid. */
+function envInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 /**
@@ -185,19 +217,20 @@ export default class EntraPlugin
   private _audience: string;
   private _maxTokenBytes: number;
   private _allowGroupOverage: boolean;
+  private _clockToleranceSeconds: number;
 
   public constructor(config: EntraConfig, appOptions: pluginUtils.PluginOptions) {
     super(config, appOptions);
     this._logger = appOptions.logger;
 
-    let resolved: ReturnType<typeof resolveConfig>;
+    let resolved: ResolvedConfig;
     try {
       resolved = resolveConfig(config, process.env, this._logger);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const envFailClosed = process.env["ENTRA_FAIL_CLOSED"];
-      const failClosed =
-        envFailClosed !== undefined ? envFailClosed === "true" : (config.failClosed ?? false);
+      // failClosed must be resolved manually here because resolveConfig
+      // failed before returning. Same env > config > default precedence.
+      const failClosed = envBool(process.env["ENTRA_FAIL_CLOSED"]) ?? config.failClosed ?? false;
 
       // Verdaccio's plugin-async-loader.js catches all constructor exceptions
       // and continues booting without the plugin. This means a config error
@@ -226,12 +259,9 @@ export default class EntraPlugin
       authority: resolved.authority,
     };
     this._audience = resolved.audience;
-    this._maxTokenBytes = config.maxTokenBytes ?? DEFAULT_MAX_TOKEN_BYTES;
-    const envAllowOverage = process.env["ENTRA_ALLOW_GROUP_OVERAGE"];
-    this._allowGroupOverage =
-      envAllowOverage !== undefined
-        ? envAllowOverage === "true"
-        : (config.allowGroupOverage ?? false);
+    this._maxTokenBytes = resolved.maxTokenBytes;
+    this._clockToleranceSeconds = resolved.clockToleranceSeconds;
+    this._allowGroupOverage = resolved.allowGroupOverage;
 
     // Issuer and JWKS URI are deterministic for Entra v2 endpoints.
     // jose handles all JWKS key fetching, caching, rotation, and retries.
@@ -328,7 +358,7 @@ export default class EntraPlugin
         algorithms: ["RS256"],
         issuer: this._issuer,
         audience: this._audience,
-        clockTolerance: DEFAULT_CLOCK_TOLERANCE_SECONDS, // @see DEFAULT_CLOCK_TOLERANCE_SECONDS
+        clockTolerance: this._clockToleranceSeconds,
       });
       return assertEntraPayload(payload);
     } catch (err) {

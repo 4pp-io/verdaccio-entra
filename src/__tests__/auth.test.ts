@@ -536,6 +536,22 @@ describe("authenticate", () => {
     expect(result).toBe(false);
   });
 
+  it("rejects token where upn is not a string", async () => {
+    // upn is documented as String
+    // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+    const token = await signToken(entraV2Claims({ preferred_username: undefined, upn: 42 }));
+    const result = await authenticateAsync(plugin, "user@contoso.com", token);
+    expect(result).toBe(false);
+  });
+
+  it("rejects token with non-string items in roles array", async () => {
+    // roles is documented as "Array of strings"
+    // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+    const token = await signToken(entraV2Claims({ roles: ["admin", 123, null] }));
+    const result = await authenticateAsync(plugin, "user@contoso.com", token);
+    expect(result).toBe(false);
+  });
+
   it("handles app-only token (client_credentials flow — no user claims)", async () => {
     // Client credential tokens have azp/azpacr but no preferred_username/upn/email.
     // The plugin should return false (no identity claim to match).
