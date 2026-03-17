@@ -160,17 +160,20 @@ export function resolveConfig(
   };
 }
 
-/** Parse an env var as a boolean ("true"/"false"), or undefined if not set. */
+/** Parse an env var as a boolean, or undefined if not set or invalid. */
 function envBool(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
-  return value === "true";
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  return undefined; // invalid value — fall through to config/default
 }
 
-/** Parse an env var as an integer, or undefined if not set or invalid. */
+/** Parse an env var as a positive integer, or undefined if not set or invalid. */
 function envInt(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
+  if (!Number.isInteger(n) || n < 0) return undefined;
+  return n;
 }
 
 /**

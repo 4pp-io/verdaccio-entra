@@ -70,14 +70,16 @@ security:
 
 All config values can be overridden via environment variables (takes precedence over config.yaml):
 
-| Env Variable                | Config Key          | Default                             | Description                                                                                                                                           |
-| --------------------------- | ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENTRA_CLIENT_ID`           | `clientId`          | —                                   | Application (client) ID from Entra app registration                                                                                                   |
-| `ENTRA_TENANT_ID`           | `tenantId`          | —                                   | Directory (tenant) ID                                                                                                                                 |
-| `ENTRA_AUDIENCE`            | `audience`          | `api://{clientId}`                  | Expected token audience (override for custom App ID URIs)                                                                                             |
-| `ENTRA_AUTHORITY`           | `authority`         | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud))                           |
-| `ENTRA_FAIL_CLOSED`         | `failClosed`        | `false`                             | Kill process on config error (`true` = `process.exit(1)`)                                                                                             |
-| `ENTRA_ALLOW_GROUP_OVERAGE` | `allowGroupOverage` | `false`                             | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
+| Env Variable                    | Config Key              | Default                             | Description                                                                                                                                           |
+| ------------------------------- | ----------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENTRA_CLIENT_ID`               | `clientId`              | —                                   | Application (client) ID from Entra app registration                                                                                                   |
+| `ENTRA_TENANT_ID`               | `tenantId`              | —                                   | Directory (tenant) ID                                                                                                                                 |
+| `ENTRA_AUDIENCE`                | `audience`              | `api://{clientId}`                  | Expected token audience (override for custom App ID URIs)                                                                                             |
+| `ENTRA_AUTHORITY`               | `authority`             | `https://login.microsoftonline.com` | Entra authority URL ([sovereign clouds](https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud))                           |
+| `ENTRA_FAIL_CLOSED`             | `failClosed`            | `false`                             | Kill process on config error (`true` = `process.exit(1)`)                                                                                             |
+| `ENTRA_ALLOW_GROUP_OVERAGE`     | `allowGroupOverage`     | `false`                             | Allow auth when Entra omits groups due to [>200 group memberships](https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference) |
+| `ENTRA_MAX_TOKEN_BYTES`         | `maxTokenBytes`         | `256000`                            | Max token size in bytes before rejecting without parsing                                                                                              |
+| `ENTRA_CLOCK_TOLERANCE_SECONDS` | `clockToleranceSeconds` | `300`                               | Clock skew tolerance for JWT verification (seconds)                                                                                                   |
 
 ### Proxy Support
 

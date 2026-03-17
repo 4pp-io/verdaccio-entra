@@ -276,6 +276,31 @@ describe("resolveConfig", () => {
     );
     expect(result.maxTokenBytes).toBe(256_000); // DEFAULT_MAX_TOKEN_BYTES
   });
+
+  it("ignores negative ENTRA_MAX_TOKEN_BYTES", () => {
+    const result = resolveConfig(
+      { clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+      { ENTRA_MAX_TOKEN_BYTES: "-1" },
+    );
+    expect(result.maxTokenBytes).toBe(256_000);
+  });
+
+  it("ignores non-integer ENTRA_CLOCK_TOLERANCE_SECONDS", () => {
+    const result = resolveConfig(
+      { clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+      { ENTRA_CLOCK_TOLERANCE_SECONDS: "3.5" },
+    );
+    expect(result.clockToleranceSeconds).toBe(300);
+  });
+
+  it("envBool is case-insensitive and ignores invalid values", () => {
+    const result = resolveConfig(
+      { clientId: TEST_CLIENT, tenantId: TEST_TENANT },
+      { ENTRA_FAIL_CLOSED: "TRUE", ENTRA_ALLOW_GROUP_OVERAGE: "yes" },
+    );
+    expect(result.failClosed).toBe(true); // "TRUE" works
+    expect(result.allowGroupOverage).toBe(false); // "yes" is invalid, falls through to default
+  });
 });
 
 describe("warnIfProxyMisconfigured", () => {

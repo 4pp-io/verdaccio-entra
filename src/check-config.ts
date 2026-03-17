@@ -107,7 +107,7 @@ async function verifyJwksEndpoint(authority: string, tenantId: string): Promise<
   return true;
 }
 
-interface CheckResult {
+export interface CheckResult {
   label: string;
   ok: boolean;
   detail: string;
