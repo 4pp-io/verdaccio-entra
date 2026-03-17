@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 24
           cache: npm
@@ -47,10 +47,18 @@ jobs:
         if: steps.changesets.outputs.hasChangesets == 'true'
         run: |
           # Use GH_TOKEN for authenticated API calls
-          PR_SHA=$(gh pr view changeset-release/main --json headRefOid --jq '.headRefOid' 2>/dev/null) || exit 0
+          PR_JSON=$(gh pr view changeset-release/main --json headRefOid,author --jq '.' 2>/dev/null) || exit 0
+          PR_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
+          PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login')
+
+          # Security: Only allow overrides if the PR was created by the automation bot.
+          # This prevents manual branch pushes from bypassing checks.
+          if [[ "$PR_AUTHOR" != "github-actions" && "$PR_AUTHOR" != "app/github-actions" ]]; then
+            echo "::error::Version Packages PR author is $PR_AUTHOR, not github-actions. Refusing to forge status."
+            exit 1
+          fi
 
           # Strict check: Only stamp if the PR exclusively touches version/changelog files
-          # This prevents malicious scripts in package.json from sneaking in
           CHANGED=$(gh pr diff changeset-release/main --name-only 2>/dev/null) || exit 0
           while IFS= read -r file; do
             case "$file" in

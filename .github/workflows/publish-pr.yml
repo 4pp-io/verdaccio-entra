@@ -45,10 +45,17 @@ jobs:
 
       - name: Verify CI passed on PR (SDL V-12)
         run: |
-          FAILED=$(gh pr checks "$PR_NUMBER" --json name,state \
-            --jq '[.[] | select(.name == "build-and-test" or .name == "secret-scanning") | select(.state != "SUCCESS")] | length')
-          if [[ "$FAILED" != "0" ]]; then
-            echo "::error::Required status checks have not passed. Cannot publish snapshot until CI is green."
+          # Ensure BOTH builds are SUCCESSful. 
+          # This prevents a bypass where checks haven't started or one is missing.
+          CHECKS=$(gh pr checks "$PR_NUMBER" --json name,state \
+            --jq '.[] | select(.name == "build-and-test" or .name == "secret-scanning")')
+          
+          SUCCESS_COUNT=$(echo "$CHECKS" | jq -s '[.[] | select(.state == "SUCCESS")] | length')
+          
+          if [[ "$SUCCESS_COUNT" != "2" ]]; then
+            echo "::error::Required status checks (build-and-test, secret-scanning) have not both passed (found $SUCCESS_COUNT success). Cannot publish snapshot."
+            echo "Current states:"
+            echo "$CHECKS" | jq -r '.name + ": " + .state'
             exit 1
           fi
         env:
@@ -80,7 +87,7 @@ jobs:
         run: git reset --hard HEAD~1
 
       - name: Setup Node.js
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -129,8 +136,17 @@ jobs:
       - name: Post failure comment
         if: failure()
         run: |
-          FAILED_JOB_ID=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" --jq ".jobs[] | select(.name == \"$GITHUB_JOB\") | .id")
-          export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
+          # Select by name (Publish Snapshot) or job ID (publish_pr)
+          FAILED_JOB_ID=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
+            --jq ".jobs[] | select(.name == \"Publish Snapshot\" or .name == \"$GITHUB_JOB\") | .id")
+          
+          if [[ -z "$FAILED_JOB_ID" ]]; then
+            # Fallback to the run link if job ID lookup fails
+            export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+          else
+            export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
+          fi
+          
           export COMMENT_URL
 
           envsubst '$COMMENT_URL $LINK' << 'EOF' > /tmp/comment-body.md
