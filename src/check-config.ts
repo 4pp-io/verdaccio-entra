@@ -28,7 +28,17 @@ export async function verifyJwksEndpoint(authority: string, tenantId: string): P
 		);
 	}
 	const keys = (data as Record<string, unknown>).keys;
-	if (!Array.isArray(keys) || keys.length === 0 || keys.some((k) => !k || typeof k !== "object")) {
+	if (
+		!Array.isArray(keys) ||
+		keys.length === 0 ||
+		keys.some(
+			(k) =>
+				!k ||
+				typeof k !== "object" ||
+				Array.isArray(k) ||
+				typeof (k as Record<string, unknown>)["kty"] !== "string",
+		)
+	) {
 		throw new Error(
 			`JWKS endpoint returned invalid data: expected an object with a non-empty 'keys' array of key objects from ${url}.`,
 		);

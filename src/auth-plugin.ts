@@ -13,12 +13,21 @@ const debug = debugCore("verdaccio:plugin:entra");
 
 /** @see https://learn.microsoft.com/windows/win32/msi/guid */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** 
- * Default max token size. Set to 256KB to align with Microsoft.IdentityModel default 
- * (TokenValidationParameters.DefaultMaximumTokenSizeInBytes).
+/**
+ * Default max token size: 256,000 bytes (decimal), matching the
+ * Microsoft.IdentityModel default `TokenValidationParameters.DefaultMaximumTokenSizeInBytes`.
+ * Note: this is 256,000 bytes, not 256 KiB (262,144).
+ * @see https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/dev/src/Microsoft.IdentityModel.Tokens/TokenValidationParameters.cs
  */
 export const DEFAULT_MAX_TOKEN_BYTES = 256_000;
 export const AUDIENCE_PREFIX = "api://";
+
+/**
+ * Clock skew tolerance for JWT verification (seconds).
+ * Accommodates minor clock drift between token issuer and this server.
+ * @see https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4
+ */
+export const DEFAULT_CLOCK_TOLERANCE_SECONDS = 300;
 
 /**
  * Default Azure Public cloud authority.
@@ -178,7 +187,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					"Set failClosed: true in config to kill the process instead. " +
 					"Error: " + msg,
 			);
-			throw new Error("verdaccio-entra: " + msg);
+			throw new Error("verdaccio-entra: " + msg, { cause: err });
 		}
 
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
@@ -263,7 +272,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 				algorithms: ["RS256"],
 				issuer: this._issuer,
 				audience: this._audience,
-				clockTolerance: 300, // 5 minutes clock skew tolerance
+				clockTolerance: DEFAULT_CLOCK_TOLERANCE_SECONDS, // @see DEFAULT_CLOCK_TOLERANCE_SECONDS
 			});
 			return payload as EntraTokenPayload;
 		} catch (err) {

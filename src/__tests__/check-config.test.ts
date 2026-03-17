@@ -11,7 +11,7 @@ function setJwksSuccess(): void {
 		ok: true,
 		json: () => Promise.resolve({
 			keys: [
-				{ kid: "test-key" }
+				{ kid: "test-key", kty: "RSA" }
 			]
 		}),
 	});
@@ -128,6 +128,28 @@ describe("runChecks", () => {
 		mockFetch.mockResolvedValue({
 			ok: true,
 			json: () => Promise.resolve({ keys: ["string-not-object"] }),
+		});
+		const results = await runChecks(input());
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("invalid data");
+	});
+
+	it("detects JWKS keys that are arrays instead of objects", async () => {
+		mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ keys: [["not", "an", "object"]] }),
+		});
+		const results = await runChecks(input());
+		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
+		expect(fail?.ok).toBe(false);
+		expect(fail?.detail).toContain("invalid data");
+	});
+
+	it("detects JWKS keys missing kty field", async () => {
+		mockFetch.mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ keys: [{ kid: "test-key" }] }),
 		});
 		const results = await runChecks(input());
 		const fail = results.find((r) => r.label === "JWKS endpoint is reachable and returns keys");
