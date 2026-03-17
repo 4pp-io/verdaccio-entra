@@ -5,10 +5,9 @@ Microsoft Entra ID (Azure AD) auth plugin for [Verdaccio](https://verdaccio.org/
 ## Features
 
 - Validates Entra ID access tokens using JWKS (RS256) with rate-limited key fetching
-- Sovereign cloud support (Azure Public, US Government, China) via OIDC discovery
+- Sovereign cloud support (Azure Public, US Government, China) via configurable `authority` URL
 - Username enforcement — npm login username must match Entra identity (anti-spoofing)
 - Group and role-based access control from JWT claims (Verdaccio handles authorization natively)
-- Self-healing OIDC discovery with exponential backoff retry
 - Environment variable override for all config values
 - Pre-flight config validation CLI (`npx verdaccio-entra-check`)
 - Docker setup using standard Verdaccio entrypoint with multi-stage build
@@ -31,7 +30,7 @@ auth:
     tenantId: "your-tenant-id"   # or ENTRA_TENANT_ID env var
     # audience: "api://your-client-id"     # or ENTRA_AUDIENCE (default: api://{clientId})
     # authority: "https://login.microsoftonline.us"  # or ENTRA_AUTHORITY (default: public cloud)
-    # maxTokenBytes: 16384                 # default: 16KB
+    # maxTokenBytes: 256000               # default: 256,000 bytes
 
 # Use $authenticated on all packages — Verdaccio best practice for private registries
 # @see https://verdaccio.org/docs/best#strong-package-access-with-authenticated
@@ -78,7 +77,7 @@ All config values can be overridden via environment variables (takes precedence 
 
 ### Proxy Support
 
-For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node 22.21+ built-in that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both OIDC discovery (`fetch`) and JWKS key fetching (`https.request`).
+For environments behind a corporate egress proxy, set `NODE_USE_ENV_PROXY=1` in the container environment. This is a Node 22.21+ built-in that enables `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support for both token fetching (`fetch`) and JWKS key fetching (`https.request`).
 
 ```bash
 docker run -p 4873:4873 \
@@ -101,13 +100,13 @@ npx verdaccio-entra-check --client-id <guid> --tenant-id <guid>
 ENTRA_CLIENT_ID=... ENTRA_TENANT_ID=... npx verdaccio-entra-check
 ```
 
-Checks: GUID format, JWKS endpoint reachability, OIDC discovery, issuer match, swapped ID detection.
+Checks: GUID format, swapped ID detection, JWKS endpoint reachability and key shape.
 
 ## Auth Flow
 
 1. User obtains an Entra access token client-side (e.g., via [MSAL](https://learn.microsoft.com/entra/msal/) or [`@4pp-io/r`](https://www.npmjs.com/package/@4pp-io/r))
 2. `npm login --registry=<url>` — username must match your Entra email/UPN
-3. Plugin validates the JWT against Entra's JWKS endpoint via OIDC discovery
+3. Plugin validates the JWT directly against Entra's JWKS endpoint (deterministic URI, no OIDC discovery)
 4. Plugin verifies username matches the token's identity (anti-spoofing)
 5. Verdaccio issues its own HS256 JWT and handles all authorization using the Entra groups
 
@@ -155,10 +154,10 @@ See [VERSIONS.md](https://github.com/verdaccio/verdaccio/blob/master/VERSIONS.md
 - Username must match Entra identity — prevents audit log spoofing via `npm login`
 - **Prefer App Roles over Groups:** Entra ID `groups` claims contain opaque GUIDs (Object IDs), making `config.yaml` unreadable. [App Roles](https://learn.microsoft.com/entra/identity-platform/howto-add-app-roles-in-apps) emit human-readable strings in the `roles` claim (e.g., `Package.Publisher`). Microsoft [recommends App Roles](https://learn.microsoft.com/security/zero-trust/develop/configure-tokens-group-claims-app-roles#groups-and-app-roles) over groups for application authorization. Both are supported — the plugin merges `groups` and `roles` into the array returned to Verdaccio
 - `clientId` and `tenantId` are validated as GUIDs at startup to prevent URL injection
-- Token payloads exceeding 16KB (configurable via `maxTokenBytes`) are rejected before JWT parsing
+- Token payloads exceeding 256,000 bytes (configurable via `maxTokenBytes`) are rejected before JWT parsing
 - JWKS key fetching is rate-limited (10 req/min) to prevent kid-spoofing DoS
 - Rotating the Verdaccio `secret` invalidates all existing client tokens (forces re-login)
-- **Corporate proxy:** Node's native `fetch` (used for OIDC discovery) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
+- **Corporate proxy:** Node's native `fetch` (used for JWKS key fetching) and jose's JWKS fetcher both ignore `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set. The plugin warns loudly at startup if it detects proxy vars without this flag. See [Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration)
 
 ## License
 
