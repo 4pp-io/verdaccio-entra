@@ -2,7 +2,7 @@ name: Dependabot Changesets
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -12,39 +12,58 @@ jobs:
   generate-changeset:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.actor == 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'dependencies')
+    if: github.actor == 'dependabot[bot]'
     steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Check if production dependency
-        id: check-prod
+      - name: Create changeset for production dependency updates
+        if: steps.metadata.outputs.dependency-type == 'direct:production'
         run: |
-          # Compare dependencies (not devDependencies) between base and head
-          git diff origin/${{ github.event.pull_request.base.ref }}..HEAD -- package.json \
-            | grep -E '^\+.*"(dependencies)"' -A 100 \
-            | grep -E '^\+' | head -20 > /tmp/dep-diff.txt || true
+          # Determine changeset type from Dependabot's update-type
+          UPDATE_TYPE="${{ steps.metadata.outputs.update-type }}"
+          case "$UPDATE_TYPE" in
+            *semver-major)  CHANGESET_TYPE="major" ;;
+            *semver-minor)  CHANGESET_TYPE="minor" ;;
+            *)              CHANGESET_TYPE="patch" ;;
+          esac
 
-          # Simpler: check if the PR title mentions a production dep
-          PROD_DEPS=$(node -e "
-            const pkg = require('./package.json');
-            console.log(Object.keys(pkg.dependencies || {}).join('|'));
-          ")
-          TITLE="${{ github.event.pull_request.title }}"
-          if echo "$TITLE" | grep -qE "($PROD_DEPS)"; then
-            echo "is_prod=true" >> "$GITHUB_OUTPUT"
-            echo "Production dependency update detected: $TITLE"
-          else
-            echo "is_prod=false" >> "$GITHUB_OUTPUT"
-            echo "devDependency update — skipping changeset: $TITLE"
-          fi
+          # Get dependency names
+          DEP_NAMES="${{ steps.metadata.outputs.dependency-names }}"
 
-      - name: Add changeset
-        if: steps.check-prod.outputs.is_prod == 'true'
-        uses: mscharley/dependency-changesets-action@v1.2.3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          use-conventional-commits: true
+          # Create changeset file
+          cat > .changeset/dependabot-${{ github.event.pull_request.number }}.md << EOF
+          ---
+          '@4pp-io/verdaccio-entra': $CHANGESET_TYPE
+          ---
+
+          Bump $DEP_NAMES
+
+          Auto-generated changeset for production dependency update.
+          EOF
+
+          # Commit the changeset
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .changeset/
+          git commit -m "chore: add changeset for dependabot update"
+          git push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Request review for production dependency updates
+        if: steps.metadata.outputs.dependency-type == 'direct:production'
+        run: gh pr edit "$PR_URL" --add-reviewer "$REVIEWER"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEWER: primeinc

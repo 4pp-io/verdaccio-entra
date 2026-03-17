@@ -1,6 +1,7 @@
 # SDL SC-4: Automated security update PRs
 version: 2
 updates:
+  # Production dependencies - grouped, require human review and changeset
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -9,7 +10,26 @@ updates:
     labels:
       - dependencies
       - security
+    groups:
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
 
+  # Development dependencies - grouped, auto-merged after CI passes
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  # GitHub Actions - auto-merged after CI passes
   - package-ecosystem: github-actions
     directory: /
     schedule:
