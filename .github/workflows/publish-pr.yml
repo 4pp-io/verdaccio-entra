@@ -122,7 +122,7 @@ jobs:
       - name: Post comment with published version
         run: |
           export SNAPSHOT_TAG PUBLISH_TAG COMMENT_URL
-          envsubst "\$SNAPSHOT_TAG \$PUBLISH_TAG \$COMMENT_URL" << 'EOF' > /tmp/comment-body.md
+          envsubst '$SNAPSHOT_TAG $PUBLISH_TAG $COMMENT_URL' << 'EOF' > /tmp/comment-body.md
           Published snapshot $SNAPSHOT_TAG in response to [this comment]($COMMENT_URL). Install with `npm i @4pp-io/verdaccio-entra@$PUBLISH_TAG`
           EOF
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
@@ -140,10 +140,16 @@ jobs:
           FAILED_JOB_ID=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
             --jq ".jobs[] | select(.name == \"Publish Snapshot\" or .name == \"$GITHUB_JOB\") | .id")
           
-          export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
+          if [[ -z "$FAILED_JOB_ID" ]]; then
+            # Fallback to the run link if job ID lookup fails
+            export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+          else
+            export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
+          fi
+          
           export COMMENT_URL
 
-          envsubst "\$COMMENT_URL \$LINK" << 'EOF' > /tmp/comment-body.md
+          envsubst '$COMMENT_URL $LINK' << 'EOF' > /tmp/comment-body.md
           Snapshot publish triggered by [this comment]($COMMENT_URL) failed. [See the failed job]($LINK).
           EOF
           gh issue comment "$PR_NUMBER" --body-file /tmp/comment-body.md
