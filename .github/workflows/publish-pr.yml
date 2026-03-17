@@ -16,7 +16,7 @@ jobs:
       contents: read # to checkout the pull request
       issues: write # to post comments and reactions
       pull-requests: write # to post reactions on PR comments
-      packages: write # to publish packages
+      id-token: write # npm provenance via OIDC
     steps:
       - name: Report in-progress reaction
         id: report_in_progress
@@ -86,9 +86,7 @@ jobs:
       - run: npm run build
 
       - name: Publish snapshot versions
-        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx changeset publish --tag "${{ steps.snapshot_version.outputs.publish_tag }}" --provenance
 
       - name: Post comment with published version
         run: |

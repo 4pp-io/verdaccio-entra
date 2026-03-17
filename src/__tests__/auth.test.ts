@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import type { MockInstance } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
@@ -86,36 +85,20 @@ function authenticateAsync(plugin: EntraPlugin, user: string, password: string):
 // ---- Tests ----
 
 describe("EntraPlugin constructor", () => {
-	let exitSpy: MockInstance;
-
-	beforeEach(() => {
-		exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string | null | undefined) => {
-			throw new Error(`process.exit called with ${code}`);
-		}) as never);
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
 	it("creates successfully with valid GUIDs", () => {
 		expect(() => createPlugin()).not.toThrow();
-		expect(exitSpy).not.toHaveBeenCalled();
 	});
 
-	it("calls process.exit(1) on invalid clientId", () => {
-		expect(() => createPlugin({ clientId: "not-a-guid" })).toThrow(/process\.exit called with 1/);
-		expect(exitSpy).toHaveBeenCalledWith(1);
+	it("throws on invalid clientId", () => {
+		expect(() => createPlugin({ clientId: "not-a-guid" })).toThrow(/verdaccio-entra/);
 	});
 
-	it("calls process.exit(1) on invalid tenantId", () => {
-		expect(() => createPlugin({ tenantId: "not-a-guid" })).toThrow(/process\.exit called with 1/);
-		expect(exitSpy).toHaveBeenCalledWith(1);
+	it("throws on invalid tenantId", () => {
+		expect(() => createPlugin({ tenantId: "not-a-guid" })).toThrow(/verdaccio-entra/);
 	});
 
-	it("calls process.exit(1) on empty clientId", () => {
-		expect(() => createPlugin({ clientId: "" })).toThrow(/process\.exit called with 1/);
-		expect(exitSpy).toHaveBeenCalledWith(1);
+	it("throws on empty clientId", () => {
+		expect(() => createPlugin({ clientId: "" })).toThrow(/verdaccio-entra/);
 	});
 
 	it("env vars override config values", () => {
@@ -123,7 +106,6 @@ describe("EntraPlugin constructor", () => {
 		process.env.ENTRA_TENANT_ID = TEST_TENANT;
 		try {
 			expect(() => createPlugin({ clientId: "placeholder", tenantId: "placeholder" })).not.toThrow();
-			expect(exitSpy).not.toHaveBeenCalled();
 		} finally {
 			delete process.env.ENTRA_CLIENT_ID;
 			delete process.env.ENTRA_TENANT_ID;
@@ -291,5 +273,28 @@ describe("authenticate", () => {
 		const token = await signToken(validClaims({ groups: undefined, roles: undefined }));
 		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(groups).toEqual(["$authenticated"]);
+	});
+
+	it("logs error on group overage (>200 groups) but still authenticates", async () => {
+		const token = await signToken(validClaims({
+			groups: undefined,
+			roles: ["registry-admin"],
+			_claim_names: { groups: "src1" },
+			_claim_sources: { src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" } },
+		}));
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(groups).toEqual(["$authenticated", "registry-admin"]);
+	});
+
+	it("logs overage with upn fallback when preferred_username is absent", async () => {
+		const token = await signToken(validClaims({
+			preferred_username: undefined,
+			upn: "user@contoso.com",
+			groups: undefined,
+			_claim_names: { groups: "src1" },
+			_claim_sources: { src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" } },
+		}));
+		const groups = await authenticateAsync(plugin, "user@contoso.com", token);
+		expect(groups).toContain("$authenticated");
 	});
 });

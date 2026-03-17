@@ -151,11 +151,12 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 			const msg = err instanceof Error ? err.message : String(err);
 			this._logger.error(
 				{},
-				"FATAL: verdaccio-entra failed to initialize. Crashing process to prevent Verdaccio from booting without authentication. " +
-					"Fix the configuration and restart. " +
-					"Error: " + msg,
+				"verdaccio-entra failed to initialize: " + msg,
 			);
-			process.exit(1);
+			throw new Error(
+				"verdaccio-entra: " + msg +
+				". Fix the configuration and restart Verdaccio.",
+			);
 		}
 
 		this._entraConfig = { ...config, clientId: resolved.clientId, tenantId: resolved.tenantId, authority: resolved.authority };
@@ -247,7 +248,34 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	private _extractGroups(payload: JWTPayload): string[] {
-		return ["$authenticated", ...this._extractStringArray(payload["groups"]), ...this._extractStringArray(payload["roles"])];
+		const groups = [
+			"$authenticated",
+			...this._extractStringArray(payload["groups"]),
+			...this._extractStringArray(payload["roles"]),
+		];
+
+		// Entra omits the groups claim when user has >200 group memberships.
+		// Instead it sets _claim_names.groups + _claim_sources with a Graph API URL.
+		// This plugin is AuthN-only and cannot call Graph, so log a clear warning.
+		// @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+		const claimNames = payload["_claim_names"];
+		if (
+			claimNames &&
+			typeof claimNames === "object" &&
+			!Array.isArray(claimNames) &&
+			"groups" in (claimNames as Record<string, unknown>)
+		) {
+			this._logger.error(
+				{ user: payload["preferred_username"] ?? payload["upn"] ?? "unknown" },
+				"Entra group overage detected for @{user}: token has >200 group memberships and Entra omitted the groups claim. " +
+					"Group-based package ACLs will NOT work for this user. " +
+					"Mitigation: configure the app registration to emit groups as roles, " +
+					"or use application roles instead of security groups. " +
+					"See https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference",
+			);
+		}
+
+		return groups;
 	}
 
 	private _extractStringArray(value: unknown): string[] {
