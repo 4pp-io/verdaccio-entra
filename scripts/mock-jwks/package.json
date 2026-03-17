@@ -1,0 +1,18 @@
+{
+  "name": "mock-jwks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "25.5.0",
+    "jose": "6.2.1",
+    "typescript": "5.9.3"
+  }
+}

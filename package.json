@@ -71,6 +71,7 @@
   "author": "primeinc <vincit.omnia.veritas@lellirose.com>",
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "lint": "eslint --max-warnings=0 --no-inline-config src/ types/",
     "test": "vitest run --exclude src/__tests__/e2e.test.ts",
     "test:e2e": "vitest run src/__tests__/e2e.test.ts",
