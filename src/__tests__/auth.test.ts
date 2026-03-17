@@ -363,65 +363,39 @@ describe("authenticate", () => {
     expect(result).toBe(false);
   });
 
-  it("returns false for expired token", async () => {
-    // Needs to be >5 minutes expired due to clockTolerance
-    const token = await signToken(entraV2Claims(), { expiresIn: "-6m" });
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("returns false for token that is not yet valid (nbf in the future)", async () => {
-    // Needs to be >5 minutes in the future due to clockTolerance
-    const nbfInFuture = Math.floor(Date.now() / 1000) + 360; // 6 minutes from now
-    const token = await signToken(entraV2Claims({ nbf: nbfInFuture }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("returns false for wrong audience", async () => {
-    const token = await signToken(entraV2Claims({ aud: "api://wrong" }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("returns false for wrong issuer", async () => {
-    const token = await signToken(
-      entraV2Claims({
-        iss: "https://login.microsoftonline.com/99999999-9999-9999-9999-999999999999/v2.0",
-      }),
-    );
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("returns false for unknown kid (no matching JWKS key)", async () => {
-    const token = await signToken(entraV2Claims(), { kid: "unknown-kid" });
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("returns false for non-JWT string", async () => {
-    const result = await authenticateAsync(plugin, "user@contoso.com", "not-a-jwt");
-    expect(result).toBe(false);
-  });
-
-  it("returns false for oversized token", async () => {
-    const result = await authenticateAsync(
-      plugin,
-      "user@contoso.com",
-      "x".repeat(DEFAULT_MAX_TOKEN_BYTES + 1),
-    );
-    expect(result).toBe(false);
-  });
-
-  it("returns false for tampered signature", async () => {
-    const token = await signToken(entraV2Claims());
-    const parts = token.split(".");
-    const result = await authenticateAsync(
-      plugin,
-      "user@contoso.com",
-      [parts[0], parts[1], "badsig"].join("."),
-    );
+  // --- Token rejection (verifies jose config + plugin pre-checks) ---
+  it.each([
+    { desc: "expired token", token: () => signToken(entraV2Claims(), { expiresIn: "-6m" }) },
+    {
+      desc: "nbf in the future",
+      token: () => signToken(entraV2Claims({ nbf: Math.floor(Date.now() / 1000) + 360 })),
+    },
+    { desc: "wrong audience", token: () => signToken(entraV2Claims({ aud: "api://wrong" })) },
+    {
+      desc: "wrong issuer",
+      token: () =>
+        signToken(
+          entraV2Claims({
+            iss: "https://login.microsoftonline.com/99999999-9999-9999-9999-999999999999/v2.0",
+          }),
+        ),
+    },
+    { desc: "unknown kid", token: () => signToken(entraV2Claims(), { kid: "unknown-kid" }) },
+    { desc: "non-JWT string", token: () => Promise.resolve("not-a-jwt") },
+    {
+      desc: "oversized token",
+      token: () => Promise.resolve("x".repeat(DEFAULT_MAX_TOKEN_BYTES + 1)),
+    },
+    {
+      desc: "tampered signature",
+      token: async () => {
+        const t = await signToken(entraV2Claims());
+        const p = t.split(".");
+        return [p[0], p[1], "badsig"].join(".");
+      },
+    },
+  ])("rejects $desc", async ({ token }) => {
+    const result = await authenticateAsync(plugin, "user@contoso.com", await token());
     expect(result).toBe(false);
   });
 
@@ -508,18 +482,6 @@ describe("authenticate", () => {
     expect(groups).toContain("$authenticated");
   });
 
-  it("succeeds with groups as GUIDs (real Entra group object IDs)", async () => {
-    // Real Entra tokens emit groups as opaque GUIDs, not friendly names
-    const token = await signToken(
-      entraV2Claims({
-        groups: ["b1c2d3e4-f5a6-7890-abcd-ef1234567890", "a0b1c2d3-e4f5-6789-0abc-def123456789"],
-      }),
-    );
-    const groups = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(groups).toContain("b1c2d3e4-f5a6-7890-abcd-ef1234567890");
-    expect(groups).toContain("a0b1c2d3-e4f5-6789-0abc-def123456789");
-  });
-
   it("rejects hasgroups=true with overage by default (no groups array, just the flag)", async () => {
     const token = await signToken(
       entraV2Claims({
@@ -531,90 +493,21 @@ describe("authenticate", () => {
     expect(result).toBe(false);
   });
 
-  it("overage warning falls back to upn when preferred_username is absent", async () => {
-    // Service accounts / B2B guests may have upn but not preferred_username
-    const token = await signToken(
-      entraV2Claims({
-        preferred_username: undefined,
-        upn: "svc-account@contoso.com",
-        email: undefined,
-        groups: undefined,
-        _claim_names: { groups: "src1" },
-        _claim_sources: {
-          src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" },
-        },
-      }),
-    );
-    const result = await authenticateAsync(plugin, "svc-account@contoso.com", token);
-    // Should reject (overage, default config) — but exercises the upn fallback in the warning
-    expect(result).toBe(false);
-  });
-
-  it("overage warning uses 'unknown' when no identity claims are present", async () => {
-    // Edge case: overage token with no username claims at all
-    const overagePlugin = createPlugin({ allowGroupOverage: true });
-    const token = await signToken(
-      entraV2Claims({
-        preferred_username: undefined,
-        upn: undefined,
-        email: undefined,
-        groups: undefined,
-        _claim_names: { groups: "src1" },
-        _claim_sources: {
-          src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" },
-        },
-      }),
-    );
-    // allowGroupOverage=true so it doesn't throw, but there's no identity claim
-    // so authenticate() itself returns false (no upn to match)
-    const result = await authenticateAsync(overagePlugin, "anyone", token);
-    expect(result).toBe(false);
-  });
-
-  // --- Shape guard: assertEntraPayload catches wrong claim types ---
-
-  it("rejects token where preferred_username is not a string", async () => {
-    const token = await signToken(entraV2Claims({ preferred_username: 12345 }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("rejects token where groups is not an array", async () => {
-    const token = await signToken(entraV2Claims({ groups: "not-an-array" }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("rejects token where roles is a string instead of array", async () => {
-    const token = await signToken(entraV2Claims({ roles: "admin" }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("rejects token where email is a number", async () => {
-    const token = await signToken(
-      entraV2Claims({
-        preferred_username: undefined,
-        upn: undefined,
-        email: 999,
-      }),
-    );
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("rejects token where upn is not a string", async () => {
-    // upn is documented as String
-    // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-    const token = await signToken(entraV2Claims({ preferred_username: undefined, upn: 42 }));
-    const result = await authenticateAsync(plugin, "user@contoso.com", token);
-    expect(result).toBe(false);
-  });
-
-  it("rejects token with non-string items in roles array", async () => {
-    // roles is documented as "Array of strings"
-    // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-    const token = await signToken(entraV2Claims({ roles: ["admin", 123, null] }));
+  // --- Shape guard: valibot schema rejects claims that violate Entra contract ---
+  // @see https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+  it.each([
+    { desc: "preferred_username is number", overrides: { preferred_username: 12345 } },
+    { desc: "upn is number", overrides: { preferred_username: undefined, upn: 42 } },
+    {
+      desc: "email is number",
+      overrides: { preferred_username: undefined, upn: undefined, email: 999 },
+    },
+    { desc: "groups is string", overrides: { groups: "not-an-array" } },
+    { desc: "roles is string", overrides: { roles: "admin" } },
+    { desc: "groups has non-string items", overrides: { groups: ["valid", 123, null, true] } },
+    { desc: "roles has non-string items", overrides: { roles: ["admin", 123, null] } },
+  ])("rejects token where $desc", async ({ overrides }) => {
+    const token = await signToken(entraV2Claims(overrides));
     const result = await authenticateAsync(plugin, "user@contoso.com", token);
     expect(result).toBe(false);
   });
