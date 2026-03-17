@@ -35,10 +35,14 @@ describe("e2e: Verdaccio + Entra plugin", () => {
 		network = await new Network().start();
 
 		// Build mock JWKS image
-		const mockJwksImage = await GenericContainer.fromDockerfile("./", "scripts/mock-jwks.Dockerfile").build();
+		const mockJwksImage = await GenericContainer.fromDockerfile("./", "scripts/mock-jwks.Dockerfile")
+			.withCache(true)
+			.build();
 
 		// Build Verdaccio plugin image
-		const verdaccioImage = await GenericContainer.fromDockerfile("./", "Dockerfile").build();
+		const verdaccioImage = await GenericContainer.fromDockerfile("./", "Dockerfile")
+			.withCache(true)
+			.build();
 
 		// Start mock JWKS server
 		mockJwks = await mockJwksImage
