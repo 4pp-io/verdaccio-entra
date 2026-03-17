@@ -73,6 +73,22 @@ describe("proxy safety", () => {
 	});
 });
 
+// === Principle: Modern crypto stack ===
+
+describe("crypto stack", () => {
+	it("no legacy JWT libraries — use jose (Web Crypto)", () => {
+		// jsonwebtoken and jwks-rsa are legacy Node crypto. jose uses native Web Crypto.
+		const banned = ["jsonwebtoken", "jwks-rsa"];
+		forEachSourceLine((file, line, num) => {
+			for (const lib of banned) {
+				if (new RegExp(`from\\s+["']${lib}["']|require\\s*\\(\\s*["']${lib}["']`).test(line)) {
+					fail(file, num, `no ${lib} — use jose instead`, line.trim());
+				}
+			}
+		});
+	});
+});
+
 // === Principle: Respect framework boundaries ===
 
 describe("framework compliance", () => {

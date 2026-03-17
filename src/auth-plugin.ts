@@ -1,11 +1,11 @@
 import { errorUtils, pluginUtils } from "@verdaccio/core";
 import type { Logger } from "@verdaccio/types";
 import debugCore from "debug";
-import jwt from "jsonwebtoken";
-import jwksClient from "jwks-rsa";
+import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from "jose";
+import type { JWTPayload, JWTVerifyGetKey } from "jose";
 
 import type { EntraConfig, EntraTokenPayload } from "../types/index";
-import { enrichVerifyError } from "./diagnostics";
+import { enrichJoseError } from "./diagnostics";
 
 const { Plugin } = pluginUtils;
 
@@ -35,14 +35,6 @@ export const ISSUERS = {
 		`${authority}/${tenantId}/v2.0`,
 } as const;
 
-/** Thrown when the JWKS endpoint is unreachable — a service error, not a credential failure. */
-class JwksServiceError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "JwksServiceError";
-	}
-}
-
 /** Validate that a config value is a valid GUID (prevents URL injection into JWKS endpoint) */
 function assertGuid(value: string, label: string): void {
 	if (!value || !GUID_RE.test(value)) {
@@ -62,12 +54,7 @@ interface OidcDiscovery {
 
 /**
  * Fetch OIDC discovery document.
- *
- * Uses native fetch() — proxy support is handled by Node 22.21+'s
- * built-in NODE_USE_ENV_PROXY=1 which covers both fetch() and https.request().
- * No custom proxy code needed in the plugin.
- *
- * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
+ * Proxy support via NODE_USE_ENV_PROXY=1 (Node 22.21+).
  * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
  */
 async function discoverOidc(authority: string, tenantId: string): Promise<OidcDiscovery> {
@@ -86,23 +73,19 @@ async function discoverOidc(authority: string, tenantId: string): Promise<OidcDi
  * Verdaccio auth plugin that validates Entra ID (Azure AD) access tokens
  * using Verdaccio's **native login flow**.
  *
- * This plugin is strictly an AuthN (authentication/identity) plugin.
- * It does NOT implement authorization hooks (allow_access, allow_publish, etc.)
- * — Verdaccio's core handles authorization natively using the groups returned
- * by `authenticate`.
+ * Uses the `jose` library (Web Crypto, zero deps) for JWT verification
+ * with `createRemoteJWKSet` handling JWKS caching, key rotation, and
+ * rate-limited refetching automatically.
  *
- * ## Proxy support
- * Set `NODE_USE_ENV_PROXY=1` to enable proxy support for both OIDC discovery
- * (fetch) and JWKS key fetching (https.request via jwks-rsa). This is a
- * Node 22.21+ built-in that covers all HTTP clients without plugin code.
- * @see https://nodejs.org/en/learn/http/enterprise-network-configuration
+ * This plugin is strictly AuthN. Verdaccio handles AuthZ natively from
+ * the groups returned by `authenticate`.
  *
- * @see https://verdaccio.org/docs/plugin-auth — IPluginAuth<T> interface
- * @see https://learn.microsoft.com/entra/identity-platform/authentication-national-cloud
+ * @see https://verdaccio.org/docs/plugin-auth
+ * @see https://github.com/panva/jose
  */
 export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUtils.Auth<EntraConfig> {
 	private _logger: Logger;
-	private _jwks: jwksClient.JwksClient | undefined;
+	private _jwks: JWTVerifyGetKey | undefined;
 	private _issuer: string | undefined;
 	private _entraConfig: EntraConfig;
 	private _audience: string;
@@ -136,8 +119,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	 * token (preferred_username / upn / email). This prevents audit log
 	 * spoofing where a valid user could claim a different username in the
 	 * registry's package metadata.
-	 *
-	 * @see https://verdaccio.org/docs/plugin-auth — authenticate callback
 	 */
 	public authenticate(user: string, password: string, cb: pluginUtils.AuthCallback): void {
 		debug("Authenticating user: %s", user);
@@ -154,7 +135,6 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 					return;
 				}
 
-				// Enforce username matches the Entra identity — prevents audit log spoofing.
 				if (user.toLowerCase() !== upn.toLowerCase()) {
 					this._logger.warn(
 						{ provided: user, actual: upn },
@@ -188,22 +168,18 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 	/**
 	 * Initialize OIDC discovery with retry on failure.
-	 * Retries up to 3 times with exponential backoff (1s, 2s, 4s).
-	 * If all retries fail, sets _discoveryFailed so the next authenticate
-	 * call re-triggers discovery (self-healing).
+	 * Only the initial OIDC discovery fetch is retried here.
+	 * JWKS key fetching/caching/rotation is handled entirely by jose's
+	 * createRemoteJWKSet (with built-in cooldown and cache-miss refetch).
 	 */
 	private async _initWithRetry(authority: string, tenantId: string, maxRetries = 3): Promise<void> {
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
 				const discovery = await discoverOidc(authority, tenantId);
 				this._issuer = discovery.issuer;
-				this._jwks = jwksClient({
-					jwksUri: discovery.jwks_uri,
-					cache: true,
-					cacheMaxAge: 600_000, // 10 min
-					rateLimit: true, // Prevent kid-spoofing DoS
-					jwksRequestsPerMinute: 10,
-				});
+				// jose handles JWKS caching, key rotation, rate limiting (cooldownDuration),
+				// and kid matching automatically. No manual state management needed.
+				this._jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
 				this._discoveryFailed = false;
 				this._logger.info(
 					{ issuer: discovery.issuer, jwks: discovery.jwks_uri },
@@ -233,10 +209,13 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	/**
-	 * Validate an Entra ID JWT: decode → fetch JWKS key → verify signature + claims.
+	 * Validate an Entra ID JWT using jose.
+	 *
+	 * jose.jwtVerify does signature verification AND claim validation
+	 * (exp, nbf, aud, iss) in a single atomic call using Web Crypto.
+	 * createRemoteJWKSet handles JWKS fetching, caching, and key rotation.
 	 */
 	private async _validateToken(token: string): Promise<EntraTokenPayload> {
-		// Self-healing: if previous discovery failed, re-trigger
 		if (this._discoveryFailed) {
 			const { authority, tenantId } = this._entraConfig;
 			this._ready = this._initWithRetry(authority ?? DEFAULT_AUTHORITY, tenantId, this._discoveryRetries);
@@ -244,61 +223,33 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 		await this._ready;
 		if (!this._jwks || !this._issuer) {
-			throw new JwksServiceError(
+			throw new DiscoveryError(
 				"Plugin not ready — OIDC discovery has not completed. " +
 					"Check the authority URL and tenant ID.",
 			);
 		}
 
-		const decoded = jwt.decode(token, { complete: true });
-		if (!decoded || typeof decoded === "string") {
-			throw new Error(
-				"Invalid token format — password must be a valid Entra ID JWT. " +
-					"Run: npm login --registry=<url> with your Entra access token as the password.",
-			);
-		}
-
-		const kid = decoded.header.kid;
-		if (!kid) {
-			throw new Error(
-				"Token missing kid header — not a valid Entra ID JWT. " +
-					"Ensure you are passing an access token, not a refresh token or id token.",
-			);
-		}
-
-		let key: jwksClient.SigningKey;
 		try {
-			key = await this._jwks.getSigningKey(kid);
-		} catch (jwksErr) {
-			const msg = jwksErr instanceof Error ? jwksErr.message : String(jwksErr);
-			throw new JwksServiceError(
-				`Failed to fetch signing key from Entra ID JWKS endpoint (kid: ${kid}): ${msg}. ` +
-					"This may indicate the token was not issued by the expected Entra tenant.",
-			);
+			const { payload } = await jwtVerify(token, this._jwks, {
+				algorithms: ["RS256"],
+				issuer: this._issuer,
+				audience: this._audience,
+			});
+			return payload as EntraTokenPayload;
+		} catch (err) {
+			if (err instanceof joseErrors.JWKSNoMatchingKey) {
+				throw new DiscoveryError(
+					`No matching signing key found for this token. ` +
+						"This may indicate the token was not issued by the expected Entra tenant.",
+				);
+			}
+			// Enrich with diagnostics (swap detection, friendly messages) — post-verify only
+			throw new Error(enrichJoseError(err, token, this._entraConfig));
 		}
-
-		return new Promise((resolve, reject) => {
-			jwt.verify(
-				token,
-				key.getPublicKey(),
-				{
-					algorithms: ["RS256"],
-					issuer: this._issuer,
-					audience: this._audience,
-				},
-				(err, payload) => {
-					if (err) {
-						const enriched = enrichVerifyError(err, token, this._entraConfig);
-						return reject(new Error(enriched));
-					}
-					resolve(payload as EntraTokenPayload);
-				},
-			);
-		});
 	}
 
-	private _extractGroups(payload: EntraTokenPayload): string[] {
-		return ["$authenticated", ...this._extractStringArray(payload.groups), ...this._extractStringArray(payload.roles)];
+	private _extractGroups(payload: JWTPayload): string[] {
+		return ["$authenticated", ...this._extractStringArray(payload["groups"]), ...this._extractStringArray(payload["roles"])];
 	}
 
 	private _extractStringArray(value: unknown): string[] {
@@ -307,6 +258,14 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 	}
 
 	private _isServiceError(err: unknown): boolean {
-		return err instanceof JwksServiceError;
+		return err instanceof DiscoveryError;
+	}
+}
+
+/** Thrown when OIDC discovery or JWKS key resolution fails — a service error. */
+class DiscoveryError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "DiscoveryError";
 	}
 }
