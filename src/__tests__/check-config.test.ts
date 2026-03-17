@@ -1,10 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterAll, beforeEach } from "vitest";
 import { TEST_TENANT, TEST_CLIENT } from "./fixtures";
 import { runChecks, countFailures, expectedAudience } from "../check-config";
 import type { CheckConfigInput } from "../check-config";
 
+const originalFetch = globalThis.fetch;
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
+
+afterAll(() => {
+	vi.stubGlobal("fetch", originalFetch);
+});
 
 function setJwksSuccess(): void {
 	mockFetch.mockResolvedValue({
