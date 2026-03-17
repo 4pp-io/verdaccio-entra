@@ -23,7 +23,8 @@ async function main() {
 
   const server = createServer((req, res) => {
     const sanitizedUrl = req.url?.replace(/[\r\n]/g, "") || "";
-    console.log("%s %s", req.method, sanitizedUrl);
+    const sanitizedMethod = req.method?.replace(/[\r\n]/g, "") || "";
+    console.log("%s %s", sanitizedMethod, sanitizedUrl);
     if (sanitizedUrl.includes("discovery/v2.0/keys")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(jwksJson);
