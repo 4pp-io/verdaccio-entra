@@ -1,6 +1,6 @@
 {
-	"name": "verdaccio-entra",
-	"version": "1.0.0",
+	"name": "@4pp-io/verdaccio-entra",
+	"version": "0.1.0",
 	"description": "Microsoft Entra ID (Azure AD) auth plugin for Verdaccio — validates access tokens via JWKS",
 	"main": "lib/src/index.js",
 	"types": "lib/src/index.d.ts",
