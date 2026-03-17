@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		include: ["src/__tests__/**/*.test.ts"],
-		exclude: ["src/__tests__/e2e.test.ts"],
+		// exclude: ["src/__tests__/e2e.test.ts"], // Handled via CLI scripts instead to allow explicit running
 		testTimeout: 5_000,
 		hookTimeout: 5_000,
 		coverage: {

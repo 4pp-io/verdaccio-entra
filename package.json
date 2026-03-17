@@ -59,7 +59,7 @@
 	"scripts": {
 		"build": "tsc",
 		"lint": "eslint --max-warnings=0 --no-inline-config src/ types/",
-		"test": "vitest run",
+		"test": "vitest run --exclude src/__tests__/e2e.test.ts",
 		"test:e2e": "vitest run src/__tests__/e2e.test.ts",
 		"test:e2e:debug": "cross-env DEBUG='testcontainers*' vitest run src/__tests__/e2e.test.ts",
 		"test:coverage": "vitest run --coverage",

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import type { MockInstance } from "vitest";
 
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
@@ -85,10 +86,10 @@ function authenticateAsync(plugin: EntraPlugin, user: string, password: string):
 // ---- Tests ----
 
 describe("EntraPlugin constructor", () => {
-	let exitSpy: ReturnType<typeof vi.spyOn>;
+	let exitSpy: MockInstance;
 
 	beforeEach(() => {
-		exitSpy = vi.spyOn(process, "exit").mockImplementation(((code) => {
+		exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string | null | undefined) => {
 			throw new Error(`process.exit called with ${code}`);
 		}) as never);
 	});
