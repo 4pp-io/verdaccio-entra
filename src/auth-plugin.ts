@@ -38,8 +38,6 @@ export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
  * @see https://learn.microsoft.com/entra/identity-platform/v2-protocols-oidc
  */
 export const ISSUERS = {
-	v1: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
-		`${authority.replace("login.microsoftonline.com", "sts.windows.net")}/${tenantId}/`,
 	v2: (tenantId: string, authority = DEFAULT_AUTHORITY): string =>
 		`${authority}/${tenantId}/v2.0`,
 } as const;
@@ -74,11 +72,20 @@ function assertGuid(value: string, label: string): void {
 export function resolveConfig(
 	config: EntraConfig,
 	env: Record<string, string | undefined> = process.env,
+	logger?: Logger,
 ): { clientId: string; tenantId: string; authority: string; audience: string } {
 	const clientId = env["ENTRA_CLIENT_ID"] ?? config.clientId;
 	const tenantId = env["ENTRA_TENANT_ID"] ?? config.tenantId;
 	const authority = env["ENTRA_AUTHORITY"] ?? config.authority ?? DEFAULT_AUTHORITY;
 	const audience = env["ENTRA_AUDIENCE"] ?? config.audience ?? `${AUDIENCE_PREFIX}${clientId}`;
+
+	if (logger) {
+		if (env["ENTRA_CLIENT_ID"]) logger.info({}, "clientId overridden by ENTRA_CLIENT_ID env var");
+		if (env["ENTRA_TENANT_ID"]) logger.info({}, "tenantId overridden by ENTRA_TENANT_ID env var");
+		if (env["ENTRA_AUTHORITY"]) logger.info({}, "authority overridden by ENTRA_AUTHORITY env var");
+		if (env["ENTRA_AUDIENCE"]) logger.info({}, "audience overridden by ENTRA_AUDIENCE env var");
+	}
+
 	assertGuid(clientId, "clientId");
 	assertGuid(tenantId, "tenantId");
 	return { clientId, tenantId, authority, audience };
@@ -139,7 +146,7 @@ export default class EntraPlugin extends Plugin<EntraConfig> implements pluginUt
 
 		let resolved: ReturnType<typeof resolveConfig>;
 		try {
-			resolved = resolveConfig(config);
+			resolved = resolveConfig(config, process.env, this._logger);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._logger.error(

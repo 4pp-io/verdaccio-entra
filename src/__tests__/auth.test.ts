@@ -242,7 +242,7 @@ describe("authenticate", () => {
 	});
 
 	it("returns false for wrong issuer", async () => {
-		const token = await signToken(validClaims({ iss: ISSUERS.v1("99999999-9999-9999-9999-999999999999") }));
+		const token = await signToken(validClaims({ iss: "https://login.microsoftonline.com/99999999-9999-9999-9999-999999999999/v2.0" }));
 		const result = await authenticateAsync(plugin, "user@contoso.com", token);
 		expect(result).toBe(false);
 	});
