@@ -20,7 +20,7 @@
 		"@types/node": "^22.19.15",
 		"@verdaccio/auth": "6.0.0-6-next.55",
 		"@verdaccio/types": "11.0.0-6-next.25",
-		"@vitest/coverage-v8": "^3.2.1",
+		"@vitest/coverage-v8": "^4.1.0",
 		"cross-env": "^10.1.0",
 		"eslint": "^10.0.0",
 		"testcontainers": "^11.12.0",
