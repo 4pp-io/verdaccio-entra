@@ -140,6 +140,46 @@ describe("EntraPlugin constructor", () => {
       delete process.env.ENTRA_TENANT_ID;
     }
   });
+
+  it("ENTRA_FAIL_CLOSED env var overrides config.failClosed", () => {
+    process.env.ENTRA_FAIL_CLOSED = "true";
+    const exitSpy: MockInstance = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as () => never);
+    try {
+      // Config says failClosed: false, but env var says true — env wins
+      expect(() => createPlugin({ clientId: "not-a-guid", failClosed: false })).toThrow(
+        /process\.exit/,
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+      delete process.env.ENTRA_FAIL_CLOSED;
+    }
+  });
+
+  it("ENTRA_ALLOW_GROUP_OVERAGE env var overrides config.allowGroupOverage", async () => {
+    process.env.ENTRA_ALLOW_GROUP_OVERAGE = "true";
+    try {
+      // Config says allowGroupOverage: false (default), but env var says true
+      const envPlugin = createPlugin({ allowGroupOverage: false });
+      const token = await signToken(
+        entraV2Claims({
+          groups: undefined,
+          roles: ["registry-admin"],
+          _claim_names: { groups: "src1" },
+          _claim_sources: {
+            src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" },
+          },
+        }),
+      );
+      const groups = await authenticateAsync(envPlugin, "user@contoso.com", token);
+      // Should allow overage because env var overrides config
+      expect(groups).toEqual(["$authenticated", "registry-admin"]);
+    } finally {
+      delete process.env.ENTRA_ALLOW_GROUP_OVERAGE;
+    }
+  });
 });
 
 describe("resolveConfig", () => {
@@ -421,6 +461,46 @@ describe("authenticate", () => {
       }),
     );
     const result = await authenticateAsync(plugin, "user@contoso.com", token);
+    expect(result).toBe(false);
+  });
+
+  it("overage warning falls back to upn when preferred_username is absent", async () => {
+    // Service accounts / B2B guests may have upn but not preferred_username
+    const token = await signToken(
+      entraV2Claims({
+        preferred_username: undefined,
+        upn: "svc-account@contoso.com",
+        email: undefined,
+        groups: undefined,
+        _claim_names: { groups: "src1" },
+        _claim_sources: {
+          src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" },
+        },
+      }),
+    );
+    const result = await authenticateAsync(plugin, "svc-account@contoso.com", token);
+    // Should reject (overage, default config) — but exercises the upn fallback in the warning
+    expect(result).toBe(false);
+  });
+
+  it("overage warning uses 'unknown' when no identity claims are present", async () => {
+    // Edge case: overage token with no username claims at all
+    const overagePlugin = createPlugin({ allowGroupOverage: true });
+    const token = await signToken(
+      entraV2Claims({
+        preferred_username: undefined,
+        upn: undefined,
+        email: undefined,
+        groups: undefined,
+        _claim_names: { groups: "src1" },
+        _claim_sources: {
+          src1: { endpoint: "https://graph.microsoft.com/v1.0/users/me/transitiveMemberOf" },
+        },
+      }),
+    );
+    // allowGroupOverage=true so it doesn't throw, but there's no identity claim
+    // so authenticate() itself returns false (no upn to match)
+    const result = await authenticateAsync(overagePlugin, "anyone", token);
     expect(result).toBe(false);
   });
 
