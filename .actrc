@@ -1,2 +1,3 @@
---container-architecture linux/amd64
---artifact-server-path .artifacts
+# Configuration for Runner.Client / act
+-P ubuntu-latest=-self-hosted
+-P self-hosted=-self-hosted

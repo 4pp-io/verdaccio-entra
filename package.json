@@ -87,9 +87,9 @@
     "release": "npm run build && changeset publish --provenance",
     "test:workflows:setup": "node scripts/setup-local-ci.js",
     "test:workflows": "npm run test:workflows:pr",
-    "test:workflows:pr": "bin/Runner.Client pull_request -e .github/act/pull_request.json",
-    "test:workflows:push": "bin/Runner.Client push -e .github/act/push.json",
-    "test:workflows:comment": "bin/Runner.Client issue_comment -e .github/act/issue_comment.json",
+    "test:workflows:pr": "bin/Runner.Client.exe pull_request --payload .github/act/pull_request.json",
+    "test:workflows:push": "bin/Runner.Client.exe push --payload .github/act/push.json",
+    "test:workflows:comment": "bin/Runner.Client.exe issue_comment --payload .github/act/issue_comment.json",
     "test:workflows:all": "npm run test:workflows:pr && npm run test:workflows:push && npm run test:workflows:comment"
   }
 }
