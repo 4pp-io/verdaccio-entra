@@ -85,10 +85,11 @@
     "changeset": "changeset",
     "version-packages": "changeset version && npm install && npm run format",
     "release": "npm run build && changeset publish --provenance",
+    "test:workflows:setup": "node scripts/setup-local-ci.js",
     "test:workflows": "npm run test:workflows:pr",
-    "test:workflows:pr": "act pull_request -e .github/act/pull_request.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
-    "test:workflows:push": "act push -e .github/act/push.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
-    "test:workflows:comment": "act issue_comment -e .github/act/issue_comment.json -s GITHUB_TOKEN=\"$(gh auth token)\"",
+    "test:workflows:pr": "bin/Runner.Client pull_request -e .github/act/pull_request.json",
+    "test:workflows:push": "bin/Runner.Client push -e .github/act/push.json",
+    "test:workflows:comment": "bin/Runner.Client issue_comment -e .github/act/issue_comment.json",
     "test:workflows:all": "npm run test:workflows:pr && npm run test:workflows:push && npm run test:workflows:comment"
   }
 }
