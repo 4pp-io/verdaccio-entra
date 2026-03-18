@@ -31,6 +31,21 @@ npm run test:workflows:comment
 npm run test:workflows:all
 ```
 
+### Safe Secret Handling
+
+Workflows that interact with the GitHub API (e.g., `gh pr checks`) require a `GITHUB_TOKEN`.
+
+By default, `act` uses an internal dummy token with no permissions. To run workflows that require API access:
+
+1.  **Use a Read-Only Token:** Create a [Fine-Grained Personal Access Token](https://github.com/settings/tokens?type=beta) with strictly **Read-only** permissions (`Metadata: Read-only`, `Pull requests: Read-only`) for this repository.
+2.  **Configure `.secrets`:** Create a file named `.secrets` in the project root (this file is ignored by git):
+    ```env
+    GITHUB_TOKEN=github_pat_...
+    ```
+3.  **Run Tests:** `act` will automatically load this token when you run `npm run test:workflows`.
+
+**Security Note:** Never use a token with write access for local testing in Docker containers. Using a read-only PAT ensures that your local environment cannot accidentally (or maliciously) modify your repository.
+
 **Note on Git State:**
 - **Dirty Changes:** Your local modifications (even if uncommitted) are visible to the runner.
 - **Untracked Files:** Included unless they match a pattern in `.gitignore`.
