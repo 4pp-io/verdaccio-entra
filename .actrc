@@ -1,0 +1,3 @@
+# Configuration for Runner.Client / act
+-P ubuntu-latest=-self-hosted
+-P self-hosted=-self-hosted
