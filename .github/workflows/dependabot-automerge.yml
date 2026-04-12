@@ -18,12 +18,10 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]'
     steps:
-      - name: Find PR for Dependabot branch
-        id: pr
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
@@ -58,8 +56,8 @@ jobs:
         if: contains(github.event.workflow_run.head_branch, '/production-dependencies')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_URL: ${{ steps.locate_pr.outputs.url }}
+          PR_NUMBER: ${{ steps.locate_pr.outputs.number }}
         run: |
           CHANGESET_FILE=".changeset/dependabot-$PR_NUMBER.md"
           if [ -f "$CHANGESET_FILE" ]; then
@@ -90,13 +88,13 @@ jobs:
       - name: Approve Dependabot PR
         if: steps.changeset.outputs.created != 'true'
         env:
-          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_URL: ${{ steps.locate_pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL"
 
       - name: Enable auto-merge
         if: steps.changeset.outputs.created != 'true'
         env:
-          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_URL: ${{ steps.locate_pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr merge --auto --squash "$PR_URL"

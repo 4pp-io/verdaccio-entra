@@ -49,9 +49,9 @@ jobs:
           # This prevents a bypass where checks haven't started or one is missing.
           CHECKS=$(gh pr checks "$PR_NUMBER" --json name,state \
             --jq '.[] | select(.name == "build-and-test" or .name == "secret-scanning")')
-          
+
           SUCCESS_COUNT=$(echo "$CHECKS" | jq -s '[.[] | select(.state == "SUCCESS")] | length')
-          
+
           if [[ "$SUCCESS_COUNT" != "2" ]]; then
             echo "::error::Required status checks (build-and-test, secret-scanning) have not both passed (found $SUCCESS_COUNT success). Cannot publish snapshot."
             echo "Current states:"
@@ -139,14 +139,14 @@ jobs:
           # Select by name (Publish Snapshot) or job ID (publish_pr)
           FAILED_JOB_ID=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
             --jq ".jobs[] | select(.name == \"Publish Snapshot\" or .name == \"$GITHUB_JOB\") | .id")
-          
+
           if [[ -z "$FAILED_JOB_ID" ]]; then
             # Fallback to the run link if job ID lookup fails
             export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
           else
             export LINK="$SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/job/${FAILED_JOB_ID}"
           fi
-          
+
           export COMMENT_URL
 
           envsubst '$COMMENT_URL $LINK' << 'EOF' > /tmp/comment-body.md
