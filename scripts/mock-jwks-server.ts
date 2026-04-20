@@ -22,7 +22,8 @@ async function main() {
   const keysJson = JSON.stringify({ privateJwk, kid: KID });
 
   const server = createServer((req, res) => {
-    console.log("%s %s", req.method, req.url);
+    const safeUrl = (req.url ?? "").replace(/[\x00-\x1F\x7F]/g, "");
+    console.log("%s %s", req.method, safeUrl);
     if (req.url?.includes("discovery/v2.0/keys")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(jwksJson);
