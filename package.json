@@ -84,6 +84,12 @@
     "check-config": "npm run build && node lib/src/cli.js",
     "changeset": "changeset",
     "version-packages": "changeset version && npm install && npm run format",
-    "release": "npm run build && changeset publish --provenance"
+    "release": "npm run build && changeset publish --provenance",
+    "test:workflows:setup": "npm run build && node lib/scripts/setup-local-ci.js",
+    "test:workflows": "npm run test:workflows:pr",
+    "test:workflows:pr": "bin/Runner.Client pull_request --payload .github/act/pull_request.json",
+    "test:workflows:push": "bin/Runner.Client push --payload .github/act/push.json",
+    "test:workflows:comment": "bin/Runner.Client issue_comment --payload .github/act/issue_comment.json",
+    "test:workflows:all": "npm run test:workflows:pr && npm run test:workflows:push && npm run test:workflows:comment"
   }
 }

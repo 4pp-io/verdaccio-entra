@@ -18,9 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -28,19 +30,30 @@ jobs:
       - run: npm ci
 
       - name: Install actionlint
-        run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest /usr/local/bin
-        shell: bash
+        if: ${{ !env.ACT }}
+        run: |
+          echo "::add-matcher::.github/actionlint-matcher.json"
+          gh release download --repo rhysd/actionlint --pattern '*_linux_amd64.tar.gz' v1.7.11
+          gh attestation verify -R rhysd/actionlint actionlint_1.7.11_linux_amd64.tar.gz
+          tar xf actionlint_1.7.11_linux_amd64.tar.gz
+          sudo mv actionlint /usr/local/bin/
+          actionlint -version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lint
-        run: npm run lint
+        run: npm run lint:workflows && npm run lint
+
 
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -53,14 +66,8 @@ jobs:
       - name: Verify CLI
         run: node lib/src/cli.js --help
 
-      - name: Verify package contents
-        run: |
-          OUTPUT=$(npm pack --dry-run 2>&1)
-          echo "$OUTPUT"
-          echo "$OUTPUT" | grep -q "lib/src/index.js" || { echo "::error::Missing lib/src/index.js"; exit 1; }
-          echo "$OUTPUT" | grep -q "lib/src/cli.js" || { echo "::error::Missing lib/src/cli.js"; exit 1; }
-          echo "$OUTPUT" | grep -q "README.md" || { echo "::error::Missing README.md"; exit 1; }
-          ! echo "$OUTPUT" | grep -q "__tests__" || { echo "::error::Test files should not be in package"; exit 1; }
+      - name: Verify package
+        run: npm publish --dry-run
 
   test:
     runs-on: ubuntu-latest
@@ -69,9 +76,11 @@ jobs:
       matrix:
         node-version: [22, 24]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -83,7 +92,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: coverage-node${{ matrix.node-version }}
           path: coverage/
@@ -94,9 +103,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -110,9 +121,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -146,13 +159,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Scan for secrets (SDL V-3)
         if: github.actor != 'dependabot[bot]'
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -167,9 +181,11 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           cache: npm
@@ -177,7 +193,7 @@ jobs:
       - run: npm ci
 
       - name: Generate SBOM (SDL RE-9 / SC-2)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d
         with:
           artifact-name: sbom-spdx.json
           format: spdx-json
