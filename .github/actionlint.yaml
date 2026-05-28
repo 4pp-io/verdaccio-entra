@@ -1,0 +1,11 @@
+# actionlint configuration
+# Reference: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+paths:
+  .github/workflows/publish-pr.yml:
+    ignore:
+      # Ignore SC2016 (Expressions don't expand in single quotes) for envsubst heredocs
+      - 'shellcheck reported issue in this script: SC2016:.+'
+  .github/workflows/dependabot-automerge.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2016:.+'

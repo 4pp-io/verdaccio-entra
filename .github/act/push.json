@@ -1,0 +1,8 @@
+{
+  "ref": "refs/heads/fix/security-vulnerabilities",
+  "before": "0000000000000000000000000000000000000000",
+  "after": "HEAD",
+  "repository": {
+    "full_name": "4pp-io/verdaccio-entra"
+  }
+}
